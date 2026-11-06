@@ -21,6 +21,7 @@ internal static class AudioTests
             ReferenceOutputCannotBeTheMicrophoneRouteDestination,
             SettingsRoundTripAndFallBackWhenMissingOrCorrupt,
             UpdaterTests.ParsesGitHubReleaseAndComparesVersions,
+            UpdaterTests.RendersReleaseNotesMarkdown,
             AecTests.CancelsDelayedEchoAndPreservesDoubleTalk,
             AecTests.PreservesNearEndWithoutReferenceAndRejectsInvalidFrames,
             AecTests.ResamplesIrregularPacketsAndRejectsAliasing,

@@ -19,7 +19,13 @@ public partial class UpdateWindow : Window
         InitializeComponent();
         Headline.Text = $"AEC Audio Router {release.Version} があります";
         Subline.Text = $"現在の版は {Updater.CurrentVersion} です。" + (routing ? "更新すると出力中の音声は停止します。" : "");
-        Notes.Text = release.Notes.Length > 0 ? release.Notes : "（リリースノートはありません）";
+        var notes = MarkdownDocument.Build(release.Notes.Length > 0 ? release.Notes : "（リリースノートはありません）",
+            (System.Windows.Media.Brush)FindResource("Accent"), (System.Windows.Media.Brush)FindResource("Hover"));
+        notes.FontFamily = Notes.FontFamily;
+        notes.FontSize = Notes.FontSize;
+        notes.Foreground = Notes.Foreground;
+        notes.LineHeight = 21;
+        Notes.Document = notes;
     }
 
     private async void InstallClick(object sender, RoutedEventArgs e)
