@@ -1,0 +1,16 @@
+**/bin/
+**/obj/
+.vs/
+TestResults/
+*.user
+.serena/
+.deps/
+native/build/
+native/out/
+build-aec.log
+
+# 作業用（インストーラ、publish の出力）
+.work/
+
+# リリースのトークン（.env.example を写して使う。コミットしない）
+.env

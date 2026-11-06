@@ -1,0 +1,243 @@
+<Window x:Class="AecAudioRouter.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="AEC Audio Router" Width="1040" Height="740" MinWidth="800" MinHeight="560"
+    Icon="pack://application:,,,/AecAudioRouter;component/Assets/AppIcon.ico" WindowStartupLocation="CenterScreen" Background="#111418" Foreground="#F0F2F4"
+    FontFamily="Yu Gothic UI" FontSize="14" UseLayoutRounding="True">
+    <Window.Resources>
+        <ResourceDictionary Source="Theme.xaml"/>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Margin="28,24,28,19">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <!-- Same drawing as Assets/AppIcon.ico (assets/make_icon.py), on its 128-unit grid. -->
+            <Viewbox Width="45" Height="45" VerticalAlignment="Center">
+                <Canvas Width="128" Height="128">
+                    <Rectangle Canvas.Left="4" Canvas.Top="4" Width="120" Height="120" RadiusX="28" RadiusY="28"
+                        Stroke="#3A4450" StrokeThickness="1">
+                        <Rectangle.Fill>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                <GradientStop Color="#252D36" Offset="0"/>
+                                <GradientStop Color="#151A20" Offset="1"/>
+                            </LinearGradientBrush>
+                        </Rectangle.Fill>
+                    </Rectangle>
+                    <Path Data="M 30,44 A 28,28 0 0 0 30,84" Stroke="#F4CB8E" StrokeThickness="6" Opacity="0.45"
+                        StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    <Path Data="M 20,34 A 42,42 0 0 0 20,94" Stroke="#F4CB8E" StrokeThickness="6" Opacity="0.25"
+                        StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    <Line X1="16" Y1="96" X2="44" Y2="32" Stroke="#F4CB8E" StrokeThickness="6"
+                        StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    <Rectangle Canvas.Left="62" Canvas.Top="26" Width="30" Height="50" RadiusX="15" RadiusY="15"
+                        Fill="{StaticResource Accent}"/>
+                    <Path Data="M 54,62 A 23,23 0 0 0 100,62" Stroke="{StaticResource Accent}" StrokeThickness="6"
+                        StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    <Line X1="77" Y1="86" X2="77" Y2="100" Stroke="{StaticResource Accent}" StrokeThickness="6"
+                        StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    <Line X1="64" Y1="102" X2="90" Y2="102" Stroke="{StaticResource Accent}" StrokeThickness="6"
+                        StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                </Canvas>
+            </Viewbox>
+            <StackPanel Grid.Column="1" Margin="13,0,8,0">
+                <TextBlock Text="AEC Audio Router" FontSize="28" FontWeight="SemiBold" FontFamily="Segoe UI"/>
+                <TextBlock Text="Windows オーディオルーター" Style="{StaticResource Caption}" Margin="1,3,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="UpdateButton" Click="UpdateClick" Content="更新を確認" FontSize="12" Margin="0,0,14,0"
+                    ToolTip="GitHub のリリースに新しい版があるか確認します。"/>
+                <ToggleButton x:Name="AecToggle" Style="{StaticResource Switch}" IsChecked="True" Margin="0,0,14,0"
+                    Content="エコー除去 (_A)" FontSize="13" FontWeight="SemiBold"
+                    Checked="AecToggleChanged" Unchecked="AecToggleChanged"
+                    AutomationProperties.Name="エコー除去 AEC3"
+                    ToolTip="AEC3 によるエコー除去の ON / OFF。出力中も切り替えられます。OFF の間もAEC3は学習を続けるため、ON に戻すとすぐに効きます。"/>
+                <Border Padding="11,6" CornerRadius="6" Background="#3A3022" BorderBrush="#624D31"
+                    BorderThickness="1" VerticalAlignment="Center"
+                    ToolTip="参照音声を使ってマイク内のエコーを抑圧します。開始時に AEC3 を初期化します。">
+                    <TextBlock x:Name="AecState" Text="AEC3 停止中" Foreground="#F4CB8E" FontSize="12" FontWeight="SemiBold"/>
+                </Border>
+            </StackPanel>
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+            Focusable="False">
+            <Grid Margin="28,0,28,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.14*"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Style="{StaticResource Card}" VerticalAlignment="Top">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,18">
+                            <Button x:Name="ReloadButton" DockPanel.Dock="Right" Click="ReloadClick"
+                                Content="一覧を更新" Padding="10,4" FontSize="12"/>
+                            <TextBlock Text="ルーティング" Style="{StaticResource Heading}" VerticalAlignment="Center"/>
+                        </DockPanel>
+
+                        <StackPanel x:Name="Settings">
+                            <Label Target="{Binding ElementName=ReferenceKind}" Content="参照音声"/>
+                            <ComboBox x:Name="ReferenceKind" SelectionChanged="ReferenceKindChanged">
+                                <ComboBoxItem Content="入力デバイス"/>
+                                <ComboBoxItem Content="再生音のループバック"/>
+                                <ComboBoxItem Content="WAV ファイル"/>
+                            </ComboBox>
+                            <Grid Margin="0,11,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="10"/>
+                                    <ColumnDefinition Width="50"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <Label x:Name="ReferenceLabel" Target="{Binding ElementName=ReferenceDevice}"/>
+                                    <ComboBox x:Name="ReferenceDevice" ItemTemplate="{StaticResource DeviceName}" SelectedValuePath="Id"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <Label Target="{Binding ElementName=ReferenceChannel}" Content="CH" ToolTip="0 は全チャンネル"/>
+                                    <TextBox x:Name="ReferenceChannel" Text="0" TextAlignment="Center"
+                                        AutomationProperties.Name="参照チャンネル" ToolTip="0 は全チャンネル"/>
+                                </StackPanel>
+                            </Grid>
+                            <DockPanel x:Name="FileSettings" Visibility="Collapsed" Margin="0,9,0,0">
+                                <Button DockPanel.Dock="Right" Margin="8,0,0,0" Click="BrowseFile" Content="参照…"/>
+                                <TextBox x:Name="FilePath" IsReadOnly="True"
+                                    AutomationProperties.Name="参照 WAV ファイル" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                            </DockPanel>
+
+                            <Border Background="#2C353F" Height="1" Margin="0,17"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="10"/>
+                                    <ColumnDefinition Width="50"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <Label Target="{Binding ElementName=MicDevice}" Content="マイク入力"/>
+                                    <ComboBox x:Name="MicDevice" ItemTemplate="{StaticResource DeviceName}" SelectedValuePath="Id"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <Label Target="{Binding ElementName=MicChannel}" Content="CH" ToolTip="0 は全チャンネル"/>
+                                    <TextBox x:Name="MicChannel" Text="0" TextAlignment="Center"
+                                        AutomationProperties.Name="マイクチャンネル" ToolTip="0 は全チャンネル"/>
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock Text="CH 0 は全チャンネル" Style="{StaticResource Caption}" Margin="0,6,0,0"/>
+
+                            <Label Target="{Binding ElementName=OutputDevice}" Content="マイクの出力先" Margin="0,16,0,5"/>
+                            <ComboBox x:Name="OutputDevice" ItemTemplate="{StaticResource DeviceName}" SelectedValuePath="Id"/>
+                        </StackPanel>
+
+                        <Border Background="#151A1F" CornerRadius="8" Padding="11,8" Margin="0,15,0,0">
+                            <DockPanel>
+                                <Button x:Name="CableDownloadButton" DockPanel.Dock="Right" Margin="8,0,0,0"
+                                    Click="OpenCableDownload" Content="入手先を開く" Padding="9,4" FontSize="12"
+                                    AutomationProperties.Name="Virtual Cables の入手先を開く"/>
+                                <TextBlock Text="Virtual Cables" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                            </DockPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Grid.Column="2">
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,18">
+                                <TextBlock DockPanel.Dock="Right" Text="dBFS" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                                <TextBlock Text="信号レベル" Style="{StaticResource Heading}"/>
+                            </DockPanel>
+                            <DockPanel Margin="0,0,0,6">
+                                <TextBlock x:Name="ReferenceValue" DockPanel.Dock="Right" Style="{StaticResource Readout}"/>
+                                <TextBlock Text="参照音声"/>
+                            </DockPanel>
+                            <ProgressBar x:Name="ReferenceMeter" Foreground="#80BDF2" AutomationProperties.Name="参照音声のピーク"/>
+                            <DockPanel Margin="0,17,0,6">
+                                <TextBlock x:Name="MicValue" DockPanel.Dock="Right" Style="{StaticResource Readout}"/>
+                                <TextBlock Text="マイク入力"/>
+                            </DockPanel>
+                            <ProgressBar x:Name="MicMeter" AutomationProperties.Name="マイク入力のピーク"/>
+                            <DockPanel Margin="0,17,0,6">
+                                <TextBlock x:Name="OutputValue" DockPanel.Dock="Right" Style="{StaticResource Readout}"/>
+                                <TextBlock Text="出力"/>
+                            </DockPanel>
+                            <ProgressBar x:Name="OutputMeter" AutomationProperties.Name="出力のピーク"/>
+                            <Grid Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="−60" Style="{StaticResource Caption}"/>
+                                <TextBlock Grid.Column="1" Text="−40" Style="{StaticResource Caption}" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Column="2" Text="−20" Style="{StaticResource Caption}" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Column="2" Text="0" Style="{StaticResource Caption}" HorizontalAlignment="Right"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                        <StackPanel>
+                            <TextBlock Text="パフォーマンス" Style="{StaticResource Heading}" Margin="0,0,0,13"/>
+                            <UniformGrid Columns="3">
+                                <StackPanel ToolTip="プロセスの CPU 使用率（全論理コア比）">
+                                    <TextBlock Text="CPU" Style="{StaticResource Caption}"/>
+                                    <TextBlock x:Name="CpuValue" Style="{StaticResource Readout}" FontSize="17" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <StackPanel ToolTip="マイク入力1ブロックあたりの平均処理時間">
+                                    <TextBlock Text="処理時間" Style="{StaticResource Caption}"/>
+                                    <TextBlock x:Name="ProcessingValue" Style="{StaticResource Readout}" FontSize="17" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <StackPanel ToolTip="出力キュー内にある音声の長さ">
+                                    <TextBlock Text="出力待ち" Style="{StaticResource Caption}"/>
+                                    <TextBlock x:Name="QueueValue" Style="{StaticResource Readout}" FontSize="17" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </UniformGrid>
+                            <TextBlock x:Name="BufferStats" Style="{StaticResource Caption}" Margin="0,11,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" BorderBrush="#2C353F" BorderThickness="0,1,0,0" Background="#15191E" Padding="28,13">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse Width="8" Height="8" Margin="0,0,8,0" VerticalAlignment="Center">
+                        <Ellipse.Style>
+                            <Style TargetType="Ellipse">
+                                <Setter Property="Fill" Value="#82919E"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsEnabled, ElementName=StopButton}" Value="True">
+                                        <Setter Property="Fill" Value="{StaticResource Accent}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Ellipse.Style>
+                    </Ellipse>
+                    <TextBlock x:Name="StateLabel" Text="停止中" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </StackPanel>
+                <TextBlock x:Name="Status" Grid.Column="1" Margin="17,0,16,0" Style="{StaticResource Caption}" VerticalAlignment="Center"
+                    AutomationProperties.LiveSetting="Polite"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button x:Name="StopButton" Click="StopClick" Content="停止" MinWidth="78" Margin="0,0,8,0" IsEnabled="False"/>
+                    <Button x:Name="StartButton" Click="StartClick" Content="開始" MinWidth="94" Style="{StaticResource Primary}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

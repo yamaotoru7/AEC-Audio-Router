@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AecAudioRouter/AecAudioRouter.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AecAudioRouter.Tests/AecAudioRouter.Tests.csproj" />
+  </Folder>
+</Solution>
