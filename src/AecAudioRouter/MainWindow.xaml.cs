@@ -40,6 +40,9 @@ public partial class MainWindow : Window
         MicChannel.Text = saved.MicrophoneChannel;
         FilePath.Text = saved.PlaybackFile ?? "";
         AecToggle.IsChecked = saved.AecEnabled;
+        DeepFilterItem.IsEnabled = DeepFilterSuppressor.IsAvailable;
+        NoiseMode.SelectedIndex = (int)(saved.NoiseSuppression == NoiseSuppressionMode.DeepFilterNet3 && !DeepFilterSuppressor.IsAvailable
+            ? NoiseSuppressionMode.Off : saved.NoiseSuppression);
         timer.Tick += UpdateMeters;
         ResetMeters();
         ReloadDevices(saved);
@@ -230,6 +233,7 @@ public partial class MainWindow : Window
                 }));
 
             pending.AecEnabled = IsAecOn;
+            pending.NoiseSuppression = NoiseSelection;
             pending.Start(route);
             previousCpu = process.TotalProcessorTime;
             previousCpuTime = Stopwatch.GetTimestamp();
@@ -280,6 +284,24 @@ public partial class MainWindow : Window
         if (session is { } active)
             active.AecEnabled = IsAecOn;
         UpdateAecState();
+    }
+
+    private NoiseSuppressionMode NoiseSelection => (NoiseSuppressionMode)Math.Max(0, NoiseMode.SelectedIndex);
+
+    private void NoiseModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (session is not { } active || active.NoiseSuppression == NoiseSelection)
+            return;
+        try
+        {
+            active.NoiseSuppression = NoiseSelection;
+        }
+        catch (InvalidOperationException error)
+        {
+            // The previous engine stays in effect; show it again.
+            Status.Text = $"ノイズ除去を切り替えられませんでした。 {error.Message}";
+            NoiseMode.SelectedIndex = (int)active.NoiseSuppression;
+        }
     }
 
     private void UpdateAecState() =>
@@ -345,7 +367,8 @@ public partial class MainWindow : Window
             Microphone = MicDevice.SelectedValue as string,
             MicrophoneChannel = MicChannel.Text,
             Output = OutputDevice.SelectedValue as string,
-            AecEnabled = IsAecOn
+            AecEnabled = IsAecOn,
+            NoiseSuppression = NoiseSelection
         };
         settings.Save(settingsPath);
     }

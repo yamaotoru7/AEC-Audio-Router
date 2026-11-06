@@ -10,7 +10,25 @@ FetchContent_Declare(webrtc
   GIT_REPOSITORY https://github.com/Enaium/webrtc-aec3.git
   GIT_TAG 2cec2f52e26646f93bd2d5498bbabf59cba18da9
   SOURCE_SUBDIR unused)
-FetchContent_MakeAvailable(webrtc)
+# RNNoise 0.2 release tarball: unlike the git tree it includes the trained model (rnnoise_data.c).
+FetchContent_Declare(rnnoise
+  URL https://github.com/xiph/rnnoise/releases/download/v0.2/rnnoise-0.2.tar.gz
+  URL_HASH SHA256=90fce4b00b9ff24c08dbfe31b82ffd43bae383d85c5535676d28b0a2b11c0d37
+  SOURCE_SUBDIR unused)
+FetchContent_MakeAvailable(webrtc rnnoise)
+set(RNNOISE_ROOT "${rnnoise_SOURCE_DIR}")
+# SSE2 build, the x64 baseline (no runtime CPU dispatch); the per-frame cost is small enough.
+# MSVC does not define __SSE2__, and the tarball's plain C path lacks os_support.h.
+add_library(rnnoise STATIC
+  "${RNNOISE_ROOT}/src/denoise.c" "${RNNOISE_ROOT}/src/rnn.c" "${RNNOISE_ROOT}/src/pitch.c"
+  "${RNNOISE_ROOT}/src/kiss_fft.c" "${RNNOISE_ROOT}/src/celt_lpc.c" "${RNNOISE_ROOT}/src/nnet.c"
+  "${RNNOISE_ROOT}/src/nnet_default.c" "${RNNOISE_ROOT}/src/parse_lpcnet_weights.c"
+  "${RNNOISE_ROOT}/src/rnnoise_data.c" "${RNNOISE_ROOT}/src/rnnoise_tables.c")
+target_include_directories(rnnoise PUBLIC "${RNNOISE_ROOT}/include" PRIVATE "${RNNOISE_ROOT}/src")
+target_compile_definitions(rnnoise PRIVATE __SSE2__ RNNOISE_BUILD _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
+if(MSVC)
+  target_compile_options(rnnoise PRIVATE /W0 /utf-8)
+endif()
 set(ROOT "${webrtc_SOURCE_DIR}/src")
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "${ROOT}/*.cc" "${ROOT}/*.c" "${ROOT}/*.cpp")
 list(FILTER SOURCES EXCLUDE REGEX ".*_neon\\.cc$")
@@ -45,5 +63,5 @@ if(MSVC)
     endif()
   endforeach()
 endif()
-target_link_libraries(Aec3Native PRIVATE winmm)
+target_link_libraries(Aec3Native PRIVATE winmm rnnoise)
 set_target_properties(Aec3Native PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/out/$<CONFIG>")

@@ -12,6 +12,8 @@ internal sealed class AecPipeline : IDisposable
     private readonly float[] alignedReference = new float[Aec3Processor.FrameSamples];
     private readonly float[] bypass = new float[Aec3Processor.FrameSamples];
     private volatile bool enabled = true;
+    private INoiseSuppressor? suppressor;
+    private NoiseSuppressionMode noiseSuppression;
     private AudioFrame? currentReference;
     private readonly RouteBuffer output;
     private readonly Meter meter;
@@ -41,6 +43,34 @@ internal sealed class AecPipeline : IDisposable
     {
         get => enabled;
         set => enabled = value;
+    }
+
+    // Applied after AEC3 (or to the raw microphone while AEC is bypassed), so it never
+    // affects the echo path that AEC3 adapts to.
+    public NoiseSuppressionMode NoiseSuppression
+    {
+        get { lock (gate) return noiseSuppression; }
+    }
+
+    // Can be switched while running. Each switch starts a fresh suppressor: a reused one
+    // would replay the audio still in its delay line from when it was last active.
+    // Loading a model takes a moment, so it happens outside the lock while audio flows.
+    public void SetNoiseSuppression(NoiseSuppressionMode mode)
+    {
+        var next = mode == NoiseSuppressionMode.Off ? null : INoiseSuppressor.Create(mode);
+        INoiseSuppressor? previous;
+        lock (gate)
+        {
+            if (disposed)
+            {
+                next?.Dispose();
+                throw new ObjectDisposedException(nameof(AecPipeline));
+            }
+            previous = suppressor;
+            suppressor = next;
+            noiseSuppression = mode;
+            previous?.Dispose();
+        }
     }
 
     public (long Missing, long Dropped, long Resets) Status
@@ -121,6 +151,7 @@ internal sealed class AecPipeline : IDisposable
         if (!apply) Array.Copy(microphone.Samples, bypass, bypass.Length);
         processor.Process(alignedReference, microphone.Samples);
         var routed = apply ? microphone.Samples : bypass;
+        suppressor?.Process(routed);
         output.Write(routed);
         var level = new LevelWindow();
         foreach (float sample in routed) level.Add(sample);
@@ -134,6 +165,8 @@ internal sealed class AecPipeline : IDisposable
             if (disposed) return;
             disposed = true;
             processor.Dispose();
+            suppressor?.Dispose();
+            suppressor = null;
             referenceStream.Dispose();
             microphoneStream.Dispose();
             references.Clear();

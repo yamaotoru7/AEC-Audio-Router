@@ -26,7 +26,14 @@ internal static class AudioTests
             AecTests.ResamplesIrregularPacketsAndRejectsAliasing,
             AecTests.PipelineHandlesJitterSilenceAndCaptureRestarts,
             AecTests.PipelineCancelsEchoAcrossRatesWithJitterAndClockDrift,
-            AecTests.PipelineBypassRoutesRawMicrophoneAndKeepsAdapting
+            AecTests.PipelineBypassRoutesRawMicrophoneAndKeepsAdapting,
+            NoiseTests.FftMatchesDftAndInverts,
+            NoiseTests.RnnoiseSuppressesNoiseAndKeepsSpeech,
+            NoiseTests.DpdfnetSuppressesNoiseAndKeepsSpeech,
+            NoiseTests.GtcrnSuppressesNoiseAndKeepsSpeech,
+            NoiseTests.DeepFilterNet3SuppressesNoiseAndKeepsSpeech,
+            NoiseTests.RejectsInvalidFramesAndSurvivesSilenceAndClipping,
+            NoiseTests.PipelineSuppressesNoiseAfterAecAndSwitchesWhileRunning
         ];
         int failures = 0;
         foreach (var test in args.Contains("--wpf") ? tests.Append(WpfWindowLoads).Append(WpfWindowRestoresAndSavesSettings) : tests)
@@ -56,7 +63,7 @@ internal static class AudioTests
             {
                 ReferenceMode = ReferenceMode.File, ReferenceDevice = "{ref}", ReferenceChannel = "2",
                 PlaybackFile = @"C:udio	est.wav", Microphone = "{mic}", MicrophoneChannel = "1",
-                Output = "{out}", AecEnabled = false
+                Output = "{out}", AecEnabled = false, NoiseSuppression = NoiseSuppressionMode.HighQuality
             };
             saved.Save(path);
             Equal(saved, AppSettings.Load(path));
@@ -64,6 +71,8 @@ internal static class AudioTests
             Equal(new AppSettings(), AppSettings.Load(path));
             File.WriteAllText(path, "{\"ReferenceMode\": 99}");
             Equal(ReferenceMode.Loopback, AppSettings.Load(path).ReferenceMode);
+            File.WriteAllText(path, "{\"NoiseSuppression\": 99}");
+            Equal(NoiseSuppressionMode.Off, AppSettings.Load(path).NoiseSuppression);
         }
         finally
         {
@@ -103,7 +112,8 @@ internal static class AudioTests
             new AppSettings
             {
                 ReferenceMode = ReferenceMode.File, ReferenceChannel = "3", PlaybackFile = @"C:udio	est.wav",
-                Microphone = "{missing-device}", MicrophoneChannel = "2", AecEnabled = false
+                Microphone = "{missing-device}", MicrophoneChannel = "2", AecEnabled = false,
+                NoiseSuppression = NoiseSuppressionMode.Light
             }.Save(path);
             var window = new MainWindow(path);
             try
@@ -114,6 +124,9 @@ internal static class AudioTests
                 Equal(@"C:udio	est.wav", ((TextBox)window.FindName("FilePath")).Text);
                 Equal<bool?>(false, ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("AecToggle")).IsChecked);
                 Equal<object?>(null, ((ComboBox)window.FindName("MicDevice")).SelectedValue);
+                var noise = (ComboBox)window.FindName("NoiseMode");
+                Equal((int)NoiseSuppressionMode.Light, noise.SelectedIndex);
+                noise.SelectedIndex = (int)NoiseSuppressionMode.HighQuality;
                 ((TextBox)window.FindName("MicChannel")).Text = "1";
             }
             finally
@@ -123,6 +136,7 @@ internal static class AudioTests
             var saved = AppSettings.Load(path);
             Equal("1", saved.MicrophoneChannel);
             Equal(false, saved.AecEnabled);
+            Equal(NoiseSuppressionMode.HighQuality, saved.NoiseSuppression);
             Equal(ReferenceMode.File, saved.ReferenceMode);
         }
         finally

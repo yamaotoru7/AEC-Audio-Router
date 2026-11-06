@@ -19,6 +19,8 @@ internal static class Aec3Native
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr aec3_resampler_create(int rate);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr aec3_resampler_create_pair(int inputRate, int outputRate);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void aec3_resampler_destroy(IntPtr handle);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int aec3_resample(ResamplerHandle handle, float[] input, int count, [Out] float[] output);
@@ -32,7 +34,11 @@ internal sealed class Aec3Handle : SafeHandleZeroOrMinusOneIsInvalid
 
 internal sealed class ResamplerHandle : SafeHandleZeroOrMinusOneIsInvalid
 {
+    // Converts rate / 100 samples to 480 (48 kHz).
     public ResamplerHandle(int rate) : base(true) => SetHandle(Aec3Native.aec3_resampler_create(rate));
+    // Converts inputRate / 100 samples to outputRate / 100.
+    public ResamplerHandle(int inputRate, int outputRate) : base(true) =>
+        SetHandle(Aec3Native.aec3_resampler_create_pair(inputRate, outputRate));
     protected override bool ReleaseHandle() { Aec3Native.aec3_resampler_destroy(handle); return true; }
 }
 
@@ -41,13 +47,15 @@ internal sealed class Aec3Processor : IDisposable
 {
     public const int SampleRate = 48000;
     public const int FrameSamples = 480;
+    // Version 2 adds the ns_* RNNoise exports, 3 aec3_resampler_create_pair.
+    private const int AbiVersion = 3;
     private readonly Aec3Handle handle;
 
     public Aec3Processor()
     {
         try
         {
-            if (Aec3Native.aec3_abi_version() != 1)
+            if (Aec3Native.aec3_abi_version() != AbiVersion)
                 throw new InvalidOperationException("AEC3 DLL のバージョンが一致しません。");
             handle = new Aec3Handle();
             if (handle.IsInvalid)

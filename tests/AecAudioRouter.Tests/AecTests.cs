@@ -238,15 +238,15 @@ internal static class AecTests
         Require(pipeline.Status.Missing < 25, "Excessive reference loss in asynchronous pipeline");
     }
 
-    private static double Energy(float[] samples, int offset, int count) =>
+    internal static double Energy(float[] samples, int offset, int count) =>
         samples.Skip(offset).Take(count).Sum(x => (double)x * x);
 
-    private static (double Gain, double Correlation, int Lag) Match(float[] expected, float[] actual, int start, int count)
+    internal static (double Gain, double Correlation, int Lag) Match(float[] expected, float[] actual, int start, int count, int maxLag = 800)
     {
         // AEC's split/merge filters add algorithmic delay. Find it independently.
         double best = double.NegativeInfinity, gain = 0;
         int bestLag = 0;
-        for (int lag = 0; lag <= 800; lag++)
+        for (int lag = 0; lag <= maxLag; lag++)
         {
             double cross = 0, sourcePower = 0, outputPower = 0;
             for (int i = start; i < start + count; i += 4)
@@ -262,7 +262,7 @@ internal static class AecTests
         return (gain, best, bestLag);
     }
 
-    private static void Require(bool condition, string message)
+    internal static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
     }

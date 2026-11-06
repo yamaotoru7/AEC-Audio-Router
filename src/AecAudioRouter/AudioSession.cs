@@ -53,6 +53,7 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
     private AecPipeline? aec;
     private int disposed;
     private volatile bool aecEnabled = true;
+    private NoiseSuppressionMode noiseSuppression;
     private int faulted;
     private long micTicks;
     private long micBlocks;
@@ -68,6 +69,18 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
         {
             aecEnabled = value;
             if (aec is { } pipeline) pipeline.Enabled = value;
+        }
+    }
+
+    // Set from the UI thread. While running, a failure to load the engine throws and
+    // leaves the previous mode in effect.
+    public NoiseSuppressionMode NoiseSuppression
+    {
+        get => noiseSuppression;
+        set
+        {
+            aec?.SetNoiseSuppression(value);
+            noiseSuppression = value;
         }
     }
 
@@ -127,7 +140,7 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
                     micBlocks++;
                 }
             }
-            catch (Exception error) { UnexpectedStop("AEC3 マイク処理", error); }
+            catch (Exception error) { UnexpectedStop("マイク処理", error); }
         };
         mic.RecordingStopped += (_, e) => UnexpectedStop("マイク入力", e.Exception);
 
@@ -184,6 +197,7 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
         }
 
         aec = Own(new AecPipeline(micFormat.SampleRate, referenceRate, buffer, Output) { Enabled = aecEnabled });
+        aec.SetNoiseSuppression(noiseSuppression);
         referenceCapture?.StartRecording();
         mic.StartRecording();
         output.Play();

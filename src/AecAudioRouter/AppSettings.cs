@@ -21,6 +21,7 @@ internal sealed record AppSettings
     public string MicrophoneChannel { get; init; } = "0";
     public string? Output { get; init; }
     public bool AecEnabled { get; init; } = true;
+    public NoiseSuppressionMode NoiseSuppression { get; init; }
 
     // Startup check of the GitHub releases (once per Updater.Interval, installed copy only).
     public bool CheckForUpdates { get; init; } = true;
@@ -34,7 +35,11 @@ internal sealed record AppSettings
             if (!File.Exists(path))
                 return new AppSettings();
             var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), Options) ?? new AppSettings();
-            return Enum.IsDefined(loaded.ReferenceMode) ? loaded : loaded with { ReferenceMode = ReferenceMode.Loopback };
+            if (!Enum.IsDefined(loaded.ReferenceMode))
+                loaded = loaded with { ReferenceMode = ReferenceMode.Loopback };
+            if (!Enum.IsDefined(loaded.NoiseSuppression))
+                loaded = loaded with { NoiseSuppression = NoiseSuppressionMode.Off };
+            return loaded;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
         {

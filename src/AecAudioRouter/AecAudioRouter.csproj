@@ -7,8 +7,24 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <PlatformTarget>x64</PlatformTarget>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+    <OnnxRuntimeVersion>1.31.1</OnnxRuntimeVersion>
+    <!-- DPDFNet (Ceva, Apache-2.0), pinned to a Hugging Face revision and checked by hash. -->
+    <DpdfnetModel>dpdfnet2_48khz_hr.onnx</DpdfnetModel>
+    <DpdfnetUrl>https://huggingface.co/Ceva-IP/DPDFNet/resolve/dd6818d00f50c836fed43a6243ebe49116de5964/onnx/$(DpdfnetModel)</DpdfnetUrl>
+    <DpdfnetSha256>7f0575a5cec0ba4ffd8f8bd657e06d007e4ccdd955d76faab922b9d3291dc14b</DpdfnetSha256>
+    <ModelCache>$(MSBuildProjectDirectory)/obj/models</ModelCache>
+    <!-- GTCRN streaming model (Rong Xiaobin, MIT), pinned to a GitHub commit and checked by hash. -->
+    <GtcrnModel>gtcrn_simple.onnx</GtcrnModel>
+    <GtcrnUrl>https://raw.githubusercontent.com/Xiaobin-Rong/gtcrn/502ebfab64da7c4a9af78dcb9c6ceef1ebb01c73/stream/onnx_models/$(GtcrnModel)</GtcrnUrl>
+    <GtcrnSha256>b4718df6228e7bdf1a8a435cf98f838636eb2fd331acabf86ba87c5192ebcb87</GtcrnSha256>
+    <!-- DeepFilterNet3 (experimental): libDF built by native/build-deepfilternet.ps1 when Rust is installed. -->
+    <DeepFilterLibrary>$(MSBuildProjectDirectory)/../../native/out/Release/deepfilter.dll</DeepFilterLibrary>
+    <DeepFilterModel>DeepFilterNet3_onnx.tar.gz</DeepFilterModel>
+    <DeepFilterUrl>https://raw.githubusercontent.com/Rikorose/DeepFilterNet/7b14b895fe7fc42cab72b4a4c1e49c982bd6404b/models/$(DeepFilterModel)</DeepFilterUrl>
+    <DeepFilterSha256>c94d91f70911001c946e0fabb4aa9adc37045f45a03b56008cb0c8244cb63616</DeepFilterSha256>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="$(OnnxRuntimeVersion)" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
     <InternalsVisibleTo Include="AecAudioRouter.Tests" />
     <Resource Include="Assets\AppIcon.ico" />
@@ -16,8 +32,41 @@
   <ItemGroup>
     <Content Include="../../native/out/Release/Aec3Native.dll" Link="Aec3Native.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../native/THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(ModelCache)/$(DpdfnetModel)" Link="models/$(DpdfnetModel)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(ModelCache)/$(GtcrnModel)" Link="models/$(GtcrnModel)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(NuGetPackageRoot)microsoft.ml.onnxruntime/$(OnnxRuntimeVersion)/ThirdPartyNotices.txt" Link="licenses/onnxruntime-ThirdPartyNotices.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="'$(NuGetPackageRoot)' != ''" />
   </ItemGroup>
   <Target Name="BuildAec3Native" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)/../../native/build-native.ps1&quot;" />
+  </Target>
+  <Target Name="DownloadDpdfnetModel" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true'">
+    <DownloadFile SourceUrl="$(DpdfnetUrl)" DestinationFolder="$(ModelCache)" DestinationFileName="$(DpdfnetModel)"
+      SkipUnchangedFiles="true" Condition="!Exists('$(ModelCache)/$(DpdfnetModel)')" />
+    <VerifyFileHash File="$(ModelCache)/$(DpdfnetModel)" Hash="$(DpdfnetSha256)" Algorithm="SHA256" />
+    <DownloadFile SourceUrl="$(GtcrnUrl)" DestinationFolder="$(ModelCache)" DestinationFileName="$(GtcrnModel)"
+      SkipUnchangedFiles="true" Condition="!Exists('$(ModelCache)/$(GtcrnModel)')" />
+    <VerifyFileHash File="$(ModelCache)/$(GtcrnModel)" Hash="$(GtcrnSha256)" Algorithm="SHA256" />
+    <DownloadFile SourceUrl="$(DeepFilterUrl)" DestinationFolder="$(ModelCache)" DestinationFileName="$(DeepFilterModel)"
+      SkipUnchangedFiles="true" Condition="Exists('$(DeepFilterLibrary)') And !Exists('$(ModelCache)/$(DeepFilterModel)')" />
+    <VerifyFileHash File="$(ModelCache)/$(DeepFilterModel)" Hash="$(DeepFilterSha256)" Algorithm="SHA256" Condition="Exists('$(DeepFilterLibrary)')" />
+    <!-- Added here rather than statically: the library only exists after the native build. -->
+    <ItemGroup Condition="Exists('$(DeepFilterLibrary)')">
+      <Content Include="$(DeepFilterLibrary)" Link="deepfilter.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(ModelCache)/$(DeepFilterModel)" Link="models/$(DeepFilterModel)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(MSBuildProjectDirectory)/../../native/out/Release/deepfilter-licenses.txt" Link="licenses/deepfilter-crates.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+  <!-- A self-contained publish (the installer) ships the .NET runtime: include its license and notices. -->
+  <Target Name="IncludeRuntimeLicenses" AfterTargets="ResolveFrameworkReferences" Condition="'$(SelfContained)' == 'true'">
+    <PropertyGroup>
+      <NetCoreRuntimePack>@(RuntimePack->WithMetadataValue('FrameworkName', 'Microsoft.NETCore.App')->'$(NuGetPackageRoot)%(NuGetPackageId)/%(NuGetPackageVersion)')</NetCoreRuntimePack>
+      <DesktopRuntimePack>@(RuntimePack->WithMetadataValue('FrameworkName', 'Microsoft.WindowsDesktop.App')->'$(NuGetPackageRoot)%(NuGetPackageId)/%(NuGetPackageVersion)')</DesktopRuntimePack>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(NetCoreRuntimePack)/THIRD-PARTY-NOTICES.TXT') Or !Exists('$(DesktopRuntimePack)/LICENSE')" Text="The .NET runtime pack license files were not found." />
+    <ItemGroup>
+      <Content Include="$(NetCoreRuntimePack)/LICENSE.TXT" Link="licenses/dotnet-runtime-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(NetCoreRuntimePack)/THIRD-PARTY-NOTICES.TXT" Link="licenses/dotnet-runtime-THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(DesktopRuntimePack)/LICENSE" Link="licenses/windowsdesktop-runtime-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
   </Target>
 </Project>
