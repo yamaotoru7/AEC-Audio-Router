@@ -50,19 +50,25 @@
                 </Canvas>
             </Viewbox>
             <StackPanel Grid.Column="1" Margin="13,0,8,0">
-                <TextBlock Text="AEC Audio Router" FontSize="28" FontWeight="SemiBold" FontFamily="Segoe UI"/>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="AEC Audio Router" FontSize="28" FontWeight="SemiBold" FontFamily="Segoe UI"/>
+                    <TextBlock x:Name="VersionText" Style="{StaticResource Caption}" FontFamily="Segoe UI" FontSize="13"
+                        Margin="10,0,0,5" VerticalAlignment="Bottom"/>
+                </StackPanel>
                 <TextBlock Text="Windows オーディオルーター" Style="{StaticResource Caption}" Margin="1,3,0,0"/>
             </StackPanel>
             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                <ToggleButton x:Name="AecToggle" Style="{StaticResource Switch}" IsChecked="True" Margin="0,0,14,0"
-                    Content="エコー除去 (_A)" FontSize="13" FontWeight="SemiBold"
+                <ToggleButton x:Name="AecToggle" Style="{StaticResource Switch}" IsChecked="True"
+                    Content="エコー除去 (_A)" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"
+                    Margin="0"
                     Checked="AecToggleChanged" Unchecked="AecToggleChanged"
                     AutomationProperties.Name="エコー除去 AEC3"
                     ToolTip="AEC3 によるエコー除去の ON / OFF。出力中も切り替えられます。OFF の間もAEC3は学習を続けるため、ON に戻すとすぐに効きます。"/>
+                <Rectangle Width="1" Height="22" Fill="{StaticResource Line}" Margin="16,0" VerticalAlignment="Center"/>
                 <Label Content="ノイズ除去 (_N)" Target="{Binding ElementName=NoiseMode}" FontSize="13" FontWeight="SemiBold"
                     Foreground="{StaticResource Text}"
-                    VerticalAlignment="Center" Margin="0,0,6,0" Padding="0"/>
-                <ComboBox x:Name="NoiseMode" Width="84" Margin="0,0,12,0" VerticalAlignment="Center"
+                    VerticalAlignment="Center" Margin="0,0,9,0" Padding="0"/>
+                <ComboBox x:Name="NoiseMode" Width="84" VerticalAlignment="Center"
                     SelectionChanged="NoiseModeChanged" AutomationProperties.Name="ノイズ除去"
                     ToolTip="マイクの背景ノイズ除去。エコー除去の後にかけるため、AEC3 には影響しません。出力中も切り替えられます。&#10;軽量：RNNoise。空調やファンなどの定常的なノイズ向け。遅延 +20 ms、CPU 負荷はごく小さい。&#10;高品質：DPDFNet。キーボードや物音など変化するノイズにも強い。遅延 +50 ms、CPU 1 コアの約 1 割。&#10;ASR：GTCRN。16 kHz で処理し、8 kHz より上の帯域を落とす。音声認識や音声 AI への入力向け。遅延 +33 ms、CPU 1 コアの約 4%。&#10;DFN3：DeepFilterNet3（試験的）。Rust でビルドしたときだけ選べる。電源のハムなど強い低音は残る。遅延 +30 ms、CPU 1 コアの約 3%。">
                     <ComboBoxItem Content="OFF"/>
@@ -71,11 +77,6 @@
                     <ComboBoxItem Content="ASR"/>
                     <ComboBoxItem x:Name="DeepFilterItem" Content="DFN3"/>
                 </ComboBox>
-                <Border Padding="11,6" CornerRadius="6" Background="#3A3022" BorderBrush="#624D31"
-                    BorderThickness="1" VerticalAlignment="Center"
-                    ToolTip="参照音声を使ってマイク内のエコーを抑圧します。開始時に AEC3 を初期化します。">
-                    <TextBlock x:Name="AecState" Text="AEC3 停止中" Foreground="#F4CB8E" FontSize="12" FontWeight="SemiBold"/>
-                </Border>
             </StackPanel>
         </Grid>
 
@@ -164,7 +165,14 @@
                         <StackPanel>
                             <DockPanel Margin="0,0,0,18">
                                 <TextBlock DockPanel.Dock="Right" Text="dBFS" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
-                                <TextBlock Text="信号レベル" Style="{StaticResource Heading}"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="信号レベル" Style="{StaticResource Heading}" VerticalAlignment="Center"/>
+                                    <Border Padding="9,3" Margin="12,0,0,0" CornerRadius="6" Background="#3A3022" BorderBrush="#624D31"
+                                        BorderThickness="1" VerticalAlignment="Center"
+                                        ToolTip="参照音声を使ってマイク内のエコーを抑圧します。開始時に AEC3 を初期化します。">
+                                        <TextBlock x:Name="AecState" Text="AEC3 停止中" Foreground="#F4CB8E" FontSize="12" FontWeight="SemiBold"/>
+                                    </Border>
+                                </StackPanel>
                             </DockPanel>
                             <DockPanel Margin="0,0,0,6">
                                 <TextBlock x:Name="ReferenceValue" DockPanel.Dock="Right" Style="{StaticResource Readout}"/>

@@ -112,12 +112,12 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ToggleButton">
                     <StackPanel Orientation="Horizontal" Background="Transparent">
+                        <ContentPresenter Margin="0,0,9,0" VerticalAlignment="Center" RecognizesAccessKey="True"/>
                         <Border x:Name="Track" Width="40" Height="22" CornerRadius="11" Background="#2A323B"
                             BorderBrush="{StaticResource Line}" BorderThickness="1" VerticalAlignment="Center">
                             <Ellipse x:Name="Knob" Width="14" Height="14" Margin="3,0" Fill="#A8B1BB"
                                 HorizontalAlignment="Left" VerticalAlignment="Center"/>
                         </Border>
-                        <ContentPresenter Margin="9,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True"/>
                     </StackPanel>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsChecked" Value="True">

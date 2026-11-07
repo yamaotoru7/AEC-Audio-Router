@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     {
         this.settingsPath = settingsPath;
         InitializeComponent();
+        VersionText.Text = $"v{Updater.CurrentVersion}";
         var saved = settings = settingsPath is null ? new AppSettings() : AppSettings.Load(settingsPath);
         ReferenceKind.SelectedIndex = (int)saved.ReferenceMode;
         ReferenceChannel.Text = saved.ReferenceChannel;
