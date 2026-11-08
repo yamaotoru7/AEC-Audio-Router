@@ -20,8 +20,10 @@ internal static class UpdaterTests
               "html_url": "https://github.com/yamaotoru7/AEC-Audio-Router/releases/tag/v0.2.10",
               "body": "AEC Audio Router 0.2.10。\r\n\r\n- **修正**：x\r\n",
               "assets": [
-                { "name": "AecAudioRouter-0.2.10-setup.exe", "browser_download_url": "https://example.test/setup.exe" },
-                { "name": "AecAudioRouter-0.2.10-setup.exe.sha256", "browser_download_url": "https://example.test/setup.exe.sha256" }
+                { "name": "AecAudioRouter-0.2.10-setup.exe", "browser_download_url": "https://example.test/setup.exe",
+                  "url": "https://api.example.test/assets/1" },
+                { "name": "AecAudioRouter-0.2.10-setup.exe.sha256", "browser_download_url": "https://example.test/setup.exe.sha256",
+                  "url": "https://api.example.test/assets/2" }
               ]
             }
             """;
@@ -31,6 +33,8 @@ internal static class UpdaterTests
         Check(release.InstallerName == "AecAudioRouter-0.2.10-setup.exe", "installer name");
         Check(release.InstallerUrl == "https://example.test/setup.exe", "installer url");
         Check(release.ChecksumUrl == "https://example.test/setup.exe.sha256", "checksum url");
+        Check(release.InstallerApiUrl == "https://api.example.test/assets/1", "installer API url");
+        Check(release.ChecksumApiUrl == "https://api.example.test/assets/2", "checksum API url");
         Check(release.Notes == "AEC Audio Router 0.2.10。\n\n- **修正**：x", "notes");
 
         // Numeric, not string, comparison: 0.2.10 is newer than 0.2.9.
@@ -96,15 +100,22 @@ internal static class UpdaterTests
         var installer = new byte[200_000];
         new Random(8).NextBytes(installer);
         string hash = Convert.ToHexStringLower(SHA256.HashData(installer));
-        using var server = new TestHttpServer(path => path switch
+        byte[] checksum = Encoding.ASCII.GetBytes(hash + "  installer\n");
+        // Like GitHub's API, the asset URLs under /api/ return metadata unless the file is asked for.
+        byte[] metadata = Encoding.ASCII.GetBytes("{\"name\": \"asset\"}");
+        using var server = new TestHttpServer((path, accept) => path switch
         {
-            "/ok-setup.exe" or "/bad-setup.exe" => (installer, false),
-            "/stall-setup.exe" => (installer, true),
-            "/bad-setup.exe.sha256" => (Encoding.ASCII.GetBytes(new string('0', 64) + "  bad-setup.exe\n"), false),
-            _ => (Encoding.ASCII.GetBytes(hash + "  installer\n"), false)
+            "/ok-setup.exe" or "/bad-setup.exe" => (200, installer, false),
+            "/stall-setup.exe" => (200, installer, true),
+            "/bad-setup.exe.sha256" => (200, Encoding.ASCII.GetBytes(new string('0', 64) + "  bad-setup.exe\n"), false),
+            // The github.com download URL failing as it did for anonymous clients.
+            "/gone-setup.exe" or "/gone-setup.exe.sha256" => (504, Encoding.ASCII.GetBytes("504 Gateway Time-out"), false),
+            "/api/gone-setup.exe" => (200, accept == "application/octet-stream" ? installer : metadata, false),
+            "/api/gone-setup.exe.sha256" => (200, accept == "application/octet-stream" ? checksum : metadata, false),
+            _ => (200, checksum, false)
         });
         ReleaseInfo Release(string name) => new(new Version(9, 9, 9), "v9.9.9", "", "", name,
-            server.Url + name, server.Url + name + ".sha256");
+            server.Url + name, server.Url + name + ".sha256", server.Url + "api/" + name, server.Url + "api/" + name + ".sha256");
         var progress = new Progress<double>(_ => { });
         var previous = Updater.StallTimeout;
         Updater.StallTimeout = TimeSpan.FromSeconds(1);
@@ -116,6 +127,11 @@ internal static class UpdaterTests
             paths.Add(path);
             Check(File.ReadAllBytes(path).AsSpan().SequenceEqual(installer), "downloaded installer");
 
+            // The download URL answers 504: both files come through the API instead.
+            string fallback = Updater.DownloadAsync(Release("gone-setup.exe"), progress, CancellationToken.None).GetAwaiter().GetResult();
+            paths.Add(fallback);
+            Check(File.ReadAllBytes(fallback).AsSpan().SequenceEqual(installer), "installer through the API");
+
             var watch = System.Diagnostics.Stopwatch.StartNew();
             try { Updater.DownloadAsync(Release("stall-setup.exe"), progress, CancellationToken.None).GetAwaiter().GetResult(); throw new Exception("stalled download returned"); }
             catch (IOException) { }
@@ -126,7 +142,8 @@ internal static class UpdaterTests
 
             // Failed downloads leave nothing behind; the good one stays in a folder of its own.
             var added = Directory.GetDirectories(Updater.DownloadRoot).Where(d => !before.Contains(d)).ToArray();
-            Check(added.Length == 1 && added[0] == Path.GetDirectoryName(path), $"leftover download folders: {added.Length}");
+            Check(added.Length == 2 && added.Contains(Path.GetDirectoryName(path)) && added.Contains(Path.GetDirectoryName(fallback)),
+                $"leftover download folders: {added.Length}");
         }
         finally
         {
@@ -142,7 +159,8 @@ internal static class UpdaterTests
         private readonly TcpListener listener = new(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource stop = new();
 
-        public TestHttpServer(Func<string, (byte[] Body, bool Stall)> respond)
+        // respond gets the path and the Accept header.
+        public TestHttpServer(Func<string, string, (int Status, byte[] Body, bool Stall)> respond)
         {
             listener.Start();
             Url = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/";
@@ -163,9 +181,12 @@ internal static class UpdaterTests
                                 var stream = client.GetStream();
                                 var reader = new StreamReader(stream, Encoding.ASCII);
                                 string path = (await reader.ReadLineAsync())?.Split(' ')[1] ?? "/";
-                                while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
-                                var (body, stall) = respond(path);
-                                byte[] head = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n");
+                                string accept = "";
+                                for (string? line; !string.IsNullOrEmpty(line = await reader.ReadLineAsync());)
+                                    if (line.StartsWith("Accept:", StringComparison.OrdinalIgnoreCase))
+                                        accept = line["Accept:".Length..].Trim();
+                                var (status, body, stall) = respond(path, accept);
+                                byte[] head = Encoding.ASCII.GetBytes($"HTTP/1.1 {status} {(status == 200 ? "OK" : "Error")}\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n");
                                 await stream.WriteAsync(head);
                                 await stream.WriteAsync(stall ? body.AsMemory(0, body.Length / 10) : body);
                                 if (stall) await Task.Delay(Timeout.Infinite, stop.Token);

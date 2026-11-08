@@ -9,8 +9,9 @@ using Microsoft.Win32;
 namespace AecAudioRouter;
 
 // A published release that the updater can install: its installer and the .sha256 written by build-installer.ps1.
+// Each asset has two addresses: its download URL on github.com and its API URL, used when the first fails.
 internal sealed record ReleaseInfo(Version Version, string Tag, string Notes, string PageUrl,
-    string InstallerName, string InstallerUrl, string ChecksumUrl);
+    string InstallerName, string InstallerUrl, string ChecksumUrl, string InstallerApiUrl = "", string ChecksumApiUrl = "");
 
 // Checks the public GitHub releases (no sign-in) and installs a newer one with the Inno Setup installer.
 internal static class Updater
@@ -79,17 +80,17 @@ internal static class Updater
         string tag = Text(release, "tag_name");
         if (!Version.TryParse(tag.TrimStart('v', 'V'), out var version))
             return null;
-        var assets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var assets = new Dictionary<string, (string Download, string Api)>(StringComparer.OrdinalIgnoreCase);
         if (release.TryGetProperty("assets", out var list) && list.ValueKind == JsonValueKind.Array)
             foreach (var asset in list.EnumerateArray())
-                assets[Text(asset, "name")] = Text(asset, "browser_download_url");
+                assets[Text(asset, "name")] = (Text(asset, "browser_download_url"), Text(asset, "url"));
         // The name becomes the file name in the download folder: it must not be a path.
         var installer = assets.Keys.FirstOrDefault(n => n.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase)
             && n == Path.GetFileName(n) && n.IndexOfAny(Path.GetInvalidFileNameChars()) < 0);
         if (installer is null || !assets.TryGetValue(installer + ".sha256", out var checksum))
             return null;
         return new ReleaseInfo(version, tag, Text(release, "body").Replace("\r\n", "\n").Trim(), Text(release, "html_url"),
-            installer, assets[installer], checksum);
+            installer, assets[installer].Download, checksum.Download, assets[installer].Api, checksum.Api);
     }
 
     public static bool IsNewer(ReleaseInfo release, Version current) => release.Version > current;
@@ -119,7 +120,9 @@ internal static class Updater
 
     private static async Task<string> DownloadIntoAsync(ReleaseInfo release, string path, IProgress<double> progress, CancellationToken ct)
     {
-        string expected = (await Http.GetStringAsync(release.ChecksumUrl, ct)).Trim().Split((char[]?)null, 2)[0].ToLowerInvariant();
+        string expected;
+        using (var checksum = await GetAssetAsync(release.ChecksumUrl, release.ChecksumApiUrl, HttpCompletionOption.ResponseContentRead, ct))
+            expected = (await checksum.Content.ReadAsStringAsync(ct)).Trim().Split((char[]?)null, 2)[0].ToLowerInvariant();
         if (expected.Length != 64)
             throw new InvalidDataException($"{release.InstallerName}.sha256 を読めませんでした。");
 
@@ -129,8 +132,7 @@ internal static class Updater
         stall.CancelAfter(StallTimeout);
         try
         {
-            using var response = await Http.GetAsync(release.InstallerUrl, HttpCompletionOption.ResponseHeadersRead, stall.Token);
-            response.EnsureSuccessStatusCode();
+            using var response = await GetAssetAsync(release.InstallerUrl, release.InstallerApiUrl, HttpCompletionOption.ResponseHeadersRead, stall.Token);
             long? total = response.Content.Headers.ContentLength;
             await using var source = await response.Content.ReadAsStreamAsync(stall.Token);
             await using var target = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
@@ -157,6 +159,44 @@ internal static class Updater
         if (actual != expected)
             throw new InvalidDataException("ダウンロードしたインストーラーのハッシュが一致しません。");
         return path;
+    }
+
+    // A successful response for a release asset. The github.com download URL has failed for
+    // anonymous clients (504 from every edge) while the same file came through the API, so a
+    // failure there is retried once through the asset's API URL.
+    private static async Task<HttpResponseMessage> GetAssetAsync(string url, string apiUrl, HttpCompletionOption completion, CancellationToken ct)
+    {
+        if (apiUrl.Length > 0)
+        {
+            try
+            {
+                var response = await Http.GetAsync(url, completion, ct);
+                if (response.IsSuccessStatusCode)
+                    return response;
+                Trace.TraceWarning($"{url} は {(int)response.StatusCode} でした。API から取り直します。");
+                response.Dispose();
+            }
+            catch (HttpRequestException error)
+            {
+                Trace.TraceWarning($"{url} を取得できませんでした。API から取り直します。 {error.Message}");
+            }
+        }
+        bool api = apiUrl.Length > 0;
+        using var request = new HttpRequestMessage(HttpMethod.Get, api ? apiUrl : url);
+        // The API returns the asset's metadata unless the file itself is asked for.
+        if (api)
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));
+        var result = await Http.SendAsync(request, completion, ct);
+        try
+        {
+            result.EnsureSuccessStatusCode();
+            return result;
+        }
+        catch
+        {
+            result.Dispose();
+            throw;
+        }
     }
 
     private static void RemoveOldDownloads()
