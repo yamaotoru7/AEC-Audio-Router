@@ -1,5 +1,7 @@
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
 
 namespace AecAudioRouter;
@@ -31,7 +33,8 @@ internal sealed class DeepFilterHandle : SafeHandleZeroOrMinusOneIsInvalid
 // networks and the deep filtering internally on 480-sample hops at 48 kHz.
 // Only present when the build had the pinned Rust toolchain (see IsAvailable).
 // libDF aborts the process on internal errors (Rust panics cannot cross the C API), so the
-// model file is checked here before it is handed over.
+// model file is checked against its pinned SHA-256 (DeepFilterSha256 in the project file)
+// before it is handed over.
 // Known weakness: a strong low tone such as mains hum is rated as clean speech by its
 // local-SNR estimate and passes through unprocessed.
 // Owned by AecPipeline; its lock serializes all calls and disposal.
@@ -48,6 +51,10 @@ internal sealed class DeepFilterSuppressor : INoiseSuppressor
     public static bool IsAvailable =>
         File.Exists(Path.Combine(AppContext.BaseDirectory, "deepfilter.dll")) && File.Exists(DefaultModelPath);
 
+    // The hash the build verified when it downloaded the model.
+    internal static string ModelSha256 { get; } = typeof(DeepFilterSuppressor).Assembly
+        .GetCustomAttributes<AssemblyMetadataAttribute>().FirstOrDefault(a => a.Key == "DeepFilterSha256")?.Value ?? "";
+
     public DeepFilterSuppressor() : this(DefaultModelPath) { }
 
     public DeepFilterSuppressor(string modelPath)
@@ -56,7 +63,25 @@ internal sealed class DeepFilterSuppressor : INoiseSuppressor
             throw new InvalidOperationException("DeepFilterNet3 はこのビルドに含まれていません（Rust のツールチェーンが要ります）。");
         if (!File.Exists(modelPath))
             throw new InvalidOperationException($"DeepFilterNet3 のモデルが見つかりません。 {modelPath}");
-        handle = new DeepFilterHandle(Path.GetFullPath(modelPath));
+        string path = Path.GetFullPath(modelPath);
+        FileStream model;
+        try
+        {
+            model = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException($"DeepFilterNet3 のモデルを開けませんでした。 {error.Message}", error);
+        }
+        using (model)
+        {
+            // A truncated or damaged archive would make libDF panic, which ends the process.
+            if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(model)), ModelSha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"DeepFilterNet3 のモデルが壊れています（ハッシュが一致しません）。 {path}");
+            // Opened with read sharing only and kept open until libDF has loaded it,
+            // so the file cannot be changed between the check and the load.
+            handle = new DeepFilterHandle(path);
+        }
         if (handle.IsInvalid)
         {
             handle.Dispose();

@@ -41,14 +41,31 @@ internal interface INoiseSuppressor : IDisposable
     // Processes one frame in place.
     void Process(float[] frame);
 
+    // A failure to load the engine is reported as InvalidOperationException, so a caller
+    // can keep the previous mode: it may also come from a missing or mismatched DLL, the
+    // ONNX runtime failing to initialize, or unexpected model metadata.
     public static INoiseSuppressor Create(NoiseSuppressionMode mode) => mode switch
     {
-        NoiseSuppressionMode.Light => new RnnoiseSuppressor(),
-        NoiseSuppressionMode.HighQuality => new DpdfnetSuppressor(),
-        NoiseSuppressionMode.Speech16k => new GtcrnSuppressor(),
-        NoiseSuppressionMode.DeepFilterNet3 => new DeepFilterSuppressor(),
+        NoiseSuppressionMode.Light => Load("RNNoise", () => new RnnoiseSuppressor()),
+        NoiseSuppressionMode.HighQuality => Load("DPDFNet", () => new DpdfnetSuppressor()),
+        NoiseSuppressionMode.Speech16k => Load("GTCRN", () => new GtcrnSuppressor()),
+        NoiseSuppressionMode.DeepFilterNet3 => Load("DeepFilterNet3", () => new DeepFilterSuppressor()),
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };
+
+    internal static INoiseSuppressor Load(string name, Func<INoiseSuppressor> create)
+    {
+        try
+        {
+            return create();
+        }
+        catch (Exception error) when (error is DllNotFoundException or BadImageFormatException or EntryPointNotFoundException
+            or TypeInitializationException or FormatException or OverflowException or KeyNotFoundException
+            or Microsoft.ML.OnnxRuntime.OnnxRuntimeException)
+        {
+            throw new InvalidOperationException($"{name} を読み込めませんでした。 {error.Message}", error);
+        }
+    }
 }
 
 // RNNoise: a small recurrent network, light enough for any CPU.

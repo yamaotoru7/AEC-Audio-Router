@@ -96,7 +96,8 @@ public partial class MainWindow : Window
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
-        catch (Exception error) when (error is HttpRequestException or OperationCanceledException or System.Text.Json.JsonException)
+        // A connection lost while reading the response surfaces as HttpIOException (an IOException).
+        catch (Exception error) when (error is HttpRequestException or IOException or OperationCanceledException or System.Text.Json.JsonException)
         {
             Trace.TraceWarning($"更新を確認できませんでした。 {error}");
             if (interactive)

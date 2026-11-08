@@ -1,3 +1,8 @@
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Documents;
@@ -37,6 +42,8 @@ internal static class UpdaterTests
         Check(Updater.Parse(Mutate(json, ".exe.sha256\"", ".exe.txt\"")) is null, "missing .sha256");
         Check(Updater.Parse(Mutate(json, "\"prerelease\": false", "\"prerelease\": true")) is null, "prerelease");
         Check(Updater.Parse(Mutate(json, "\"v0.2.10\"", "\"latest\"")) is null, "bad tag");
+        // The asset name becomes a file name in the download folder.
+        Check(Updater.Parse(Mutate(json, "\"AecAudioRouter-0.2.10-setup.exe", "\"..\\\\..\\\\AecAudioRouter-0.2.10-setup.exe")) is null, "path in asset name");
 
         var now = DateTimeOffset.Now;
         Check(Updater.IsDue(null, now), "never checked");
@@ -77,6 +84,106 @@ internal static class UpdaterTests
         Check(link.NavigateUri == new Uri("https://example.com/r"), "link");
         Check(blocks[3] is BlockUIContainer, "rule");
         Check(blocks[4] is Paragraph code && Text(code) == "code **raw**", "code block keeps markup");
+
+        // A link that only looks like a URL must not stop the update dialog from opening.
+        var broken = (Paragraph)MarkdownDocument.Build("[a](https://[) と [b](http://host:99999/)", Brushes.Teal, Brushes.Gray).Blocks.Single();
+        Check(!broken.Inlines.OfType<Hyperlink>().Any() && Text(broken) == "[a](https://[) と [b](http://host:99999/)", "malformed links stay text");
+    }
+
+    // Against a local HTTP server: a complete download, a body that stops arriving, and a wrong checksum.
+    public static void DownloadsVerifiesAndGivesUpOnAStalledBody()
+    {
+        var installer = new byte[200_000];
+        new Random(8).NextBytes(installer);
+        string hash = Convert.ToHexStringLower(SHA256.HashData(installer));
+        using var server = new TestHttpServer(path => path switch
+        {
+            "/ok-setup.exe" or "/bad-setup.exe" => (installer, false),
+            "/stall-setup.exe" => (installer, true),
+            "/bad-setup.exe.sha256" => (Encoding.ASCII.GetBytes(new string('0', 64) + "  bad-setup.exe\n"), false),
+            _ => (Encoding.ASCII.GetBytes(hash + "  installer\n"), false)
+        });
+        ReleaseInfo Release(string name) => new(new Version(9, 9, 9), "v9.9.9", "", "", name,
+            server.Url + name, server.Url + name + ".sha256");
+        var progress = new Progress<double>(_ => { });
+        var previous = Updater.StallTimeout;
+        Updater.StallTimeout = TimeSpan.FromSeconds(1);
+        var paths = new List<string>();
+        var before = Directory.Exists(Updater.DownloadRoot) ? Directory.GetDirectories(Updater.DownloadRoot).ToHashSet() : [];
+        try
+        {
+            string path = Updater.DownloadAsync(Release("ok-setup.exe"), progress, CancellationToken.None).GetAwaiter().GetResult();
+            paths.Add(path);
+            Check(File.ReadAllBytes(path).AsSpan().SequenceEqual(installer), "downloaded installer");
+
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            try { Updater.DownloadAsync(Release("stall-setup.exe"), progress, CancellationToken.None).GetAwaiter().GetResult(); throw new Exception("stalled download returned"); }
+            catch (IOException) { }
+            Check(watch.Elapsed < TimeSpan.FromSeconds(10), $"stalled download gave up after {watch.Elapsed.TotalSeconds:F1} s");
+
+            try { Updater.DownloadAsync(Release("bad-setup.exe"), progress, CancellationToken.None).GetAwaiter().GetResult(); throw new Exception("wrong checksum accepted"); }
+            catch (InvalidDataException) { }
+
+            // Failed downloads leave nothing behind; the good one stays in a folder of its own.
+            var added = Directory.GetDirectories(Updater.DownloadRoot).Where(d => !before.Contains(d)).ToArray();
+            Check(added.Length == 1 && added[0] == Path.GetDirectoryName(path), $"leftover download folders: {added.Length}");
+        }
+        finally
+        {
+            Updater.StallTimeout = previous;
+            foreach (string path in paths) Directory.Delete(Path.GetDirectoryName(path)!, true);
+        }
+    }
+
+    // Serves each request with Connection: close. A stalled response sends the headers and
+    // a tenth of the body, then holds the connection open.
+    private sealed class TestHttpServer : IDisposable
+    {
+        private readonly TcpListener listener = new(IPAddress.Loopback, 0);
+        private readonly CancellationTokenSource stop = new();
+
+        public TestHttpServer(Func<string, (byte[] Body, bool Stall)> respond)
+        {
+            listener.Start();
+            Url = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/";
+            _ = Task.Run(async () =>
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    TcpClient client;
+                    try { client = await listener.AcceptTcpClientAsync(stop.Token); }
+                    catch (OperationCanceledException) { return; }
+                    catch (SocketException) { return; }
+                    _ = Task.Run(async () =>
+                    {
+                        using (client)
+                        {
+                            try
+                            {
+                                var stream = client.GetStream();
+                                var reader = new StreamReader(stream, Encoding.ASCII);
+                                string path = (await reader.ReadLineAsync())?.Split(' ')[1] ?? "/";
+                                while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
+                                var (body, stall) = respond(path);
+                                byte[] head = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n");
+                                await stream.WriteAsync(head);
+                                await stream.WriteAsync(stall ? body.AsMemory(0, body.Length / 10) : body);
+                                if (stall) await Task.Delay(Timeout.Infinite, stop.Token);
+                            }
+                            catch (Exception error) when (error is IOException or OperationCanceledException) { }
+                        }
+                    });
+                }
+            });
+        }
+
+        public string Url { get; }
+
+        public void Dispose()
+        {
+            stop.Cancel();
+            listener.Stop();
+        }
     }
 
     private static void Check(bool condition, string what)

@@ -4,7 +4,7 @@
 ; 設定（%LocalAppData%\AecAudioRouter\settings.json）はアンインストールでも消さない。
 
 #ifndef AppVersion
-  #define AppVersion "0.2.2"
+  #define AppVersion "0.2.3"
 #endif
 #ifndef PublishDir
   #define PublishDir "..\.work\publish"
@@ -45,6 +45,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
+; 更新では古い版のファイルを先に消す。上書きだけだと、新しい版で無くなった DLL やモデル
+; （Rust 無しのビルドでの deepfilter.dll など）が残り、アプリがそれを読み込んでしまう。
+; このアプリが入っているフォルダのときだけ、このアプリが置くものだけを消す。
+[InstallDelete]
+Type: files; Name: "{app}\*.dll"; Check: IsAppFolder
+Type: filesandordirs; Name: "{app}\models"; Check: IsAppFolder
+Type: filesandordirs; Name: "{app}\licenses"; Check: IsAppFolder
+
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
@@ -59,6 +67,11 @@ Filename: "{app}\AecAudioRouter.exe"; Description: "{cm:LaunchProgram,AEC Audio 
 Filename: "{app}\AecAudioRouter.exe"; Flags: nowait; Check: RelaunchAfterUpdate
 
 [Code]
+function IsAppFolder: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\AecAudioRouter.exe'));
+end;
+
 function RelaunchAfterUpdate: Boolean;
 begin
   Result := WizardSilent and (ExpandConstant('{param:RELAUNCH|0}') = '1');

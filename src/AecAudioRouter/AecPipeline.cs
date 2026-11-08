@@ -69,8 +69,10 @@ internal sealed class AecPipeline : IDisposable
             previous = suppressor;
             suppressor = next;
             noiseSuppression = mode;
-            previous?.Dispose();
         }
+        // Outside the lock: releasing a model takes a moment, and audio must keep flowing.
+        // The audio thread no longer sees it once the lock is released.
+        previous?.Dispose();
     }
 
     public (long Missing, long Dropped, long Resets) Status
@@ -100,12 +102,7 @@ internal sealed class AecPipeline : IDisposable
             microphoneStream.Push(samples, arrivalTime, frame =>
             {
                 if (!double.IsNaN(lastMicTime) && Math.Abs(frame.Time - lastMicTime - 0.01) > 0.1)
-                {
-                    microphones.Clear();
-                    processor.Dispose();
-                    processor = new Aec3Processor();
-                    resets++;
-                }
+                    ResetAfterDiscontinuity();
                 lastMicTime = frame.Time;
                 microphones.Enqueue(frame);
                 // Let reference callbacks arrive before processing the corresponding capture.
@@ -114,6 +111,32 @@ internal sealed class AecPipeline : IDisposable
             });
         }
     }
+
+    // The microphone jumped in time (capture restarted): drop what belongs to the old timeline.
+    private void ResetAfterDiscontinuity()
+    {
+        // Created first, so a failure leaves the working processor in place.
+        var fresh = new Aec3Processor();
+        processor.Dispose();
+        processor = fresh;
+        microphones.Clear();
+        // Its timestamp may now lie ahead of the microphone; the queue is re-read by time.
+        currentReference = null;
+        // Push silence through the noise suppressor so the audio still in its delay line
+        // (from before the gap) is not played after it.
+        if (suppressor is not null)
+        {
+            for (int n = 0; n < SuppressorFlushFrames; n++)
+            {
+                Array.Clear(bypass);
+                suppressor.Process(bypass);
+            }
+        }
+        resets++;
+    }
+
+    // Covers the longest noise suppressor delay (DPDFNet, 50 ms).
+    private const int SuppressorFlushFrames = DpdfnetSuppressor.DelaySamples / Aec3Processor.FrameSamples + 1;
 
     private void Process(AudioFrame microphone)
     {

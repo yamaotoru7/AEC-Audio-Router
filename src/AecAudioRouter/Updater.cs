@@ -25,6 +25,9 @@ internal static class Updater
 
     private static readonly HttpClient Http = CreateClient();
 
+    // The download gives up when no data arrives for this long (settable for tests).
+    internal static TimeSpan StallTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
     public static Version CurrentVersion
     {
         get
@@ -80,7 +83,9 @@ internal static class Updater
         if (release.TryGetProperty("assets", out var list) && list.ValueKind == JsonValueKind.Array)
             foreach (var asset in list.EnumerateArray())
                 assets[Text(asset, "name")] = Text(asset, "browser_download_url");
-        var installer = assets.Keys.FirstOrDefault(n => n.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase));
+        // The name becomes the file name in the download folder: it must not be a path.
+        var installer = assets.Keys.FirstOrDefault(n => n.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase)
+            && n == Path.GetFileName(n) && n.IndexOfAny(Path.GetInvalidFileNameChars()) < 0);
         if (installer is null || !assets.TryGetValue(installer + ".sha256", out var checksum))
             return null;
         return new ReleaseInfo(version, tag, Text(release, "body").Replace("\r\n", "\n").Trim(), Text(release, "html_url"),
@@ -89,43 +94,95 @@ internal static class Updater
 
     public static bool IsNewer(ReleaseInfo release, Version current) => release.Version > current;
 
-    // Downloads the installer next to %TEMP% and checks it against the published .sha256.
+    internal static string DownloadRoot => Path.Combine(Path.GetTempPath(), "AecAudioRouter-update");
+
+    // Downloads the installer into a folder of its own under %TEMP% and checks it against
+    // the published .sha256. On failure nothing is left behind; folders of earlier attempts
+    // are removed after a day (the installer started from one may still be running sooner).
     public static async Task<string> DownloadAsync(ReleaseInfo release, IProgress<double> progress, CancellationToken ct)
+    {
+        RemoveOldDownloads();
+        // One folder per attempt: another instance updating at the same time cannot
+        // overwrite this file between its check and its start.
+        string directory = Path.Combine(DownloadRoot, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            return await DownloadIntoAsync(release, Path.Combine(directory, release.InstallerName), progress, ct);
+        }
+        catch
+        {
+            TryDelete(directory);
+            throw;
+        }
+    }
+
+    private static async Task<string> DownloadIntoAsync(ReleaseInfo release, string path, IProgress<double> progress, CancellationToken ct)
     {
         string expected = (await Http.GetStringAsync(release.ChecksumUrl, ct)).Trim().Split((char[]?)null, 2)[0].ToLowerInvariant();
         if (expected.Length != 64)
             throw new InvalidDataException($"{release.InstallerName}.sha256 を読めませんでした。");
 
-        string directory = Path.Combine(Path.GetTempPath(), "AecAudioRouter-update");
-        Directory.CreateDirectory(directory);
-        string path = Path.Combine(directory, release.InstallerName);
-        using (var response = await Http.GetAsync(release.InstallerUrl, HttpCompletionOption.ResponseHeadersRead, ct))
+        // HttpClient.Timeout stops at the headers (ResponseHeadersRead), so a body that
+        // stops arriving is caught by this timer, restarted whenever data comes in.
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        stall.CancelAfter(StallTimeout);
+        try
         {
+            using var response = await Http.GetAsync(release.InstallerUrl, HttpCompletionOption.ResponseHeadersRead, stall.Token);
             response.EnsureSuccessStatusCode();
             long? total = response.Content.Headers.ContentLength;
-            await using var source = await response.Content.ReadAsStreamAsync(ct);
-            await using var target = File.Create(path);
+            await using var source = await response.Content.ReadAsStreamAsync(stall.Token);
+            await using var target = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             var buffer = new byte[81920];
             long done = 0;
             int read;
-            while ((read = await source.ReadAsync(buffer, ct)) > 0)
+            while ((read = await source.ReadAsync(buffer, stall.Token)) > 0)
             {
+                stall.CancelAfter(StallTimeout);
                 await target.WriteAsync(buffer.AsMemory(0, read), ct);
                 done += read;
                 if (total > 0)
                     progress.Report((double)done / total.Value);
             }
         }
+        catch (OperationCanceledException error) when (!ct.IsCancellationRequested)
+        {
+            throw new IOException($"{release.InstallerName} のダウンロードが {StallTimeout.TotalSeconds:0} 秒間進みませんでした。", error);
+        }
 
         string actual;
         await using (var file = File.OpenRead(path))
             actual = Convert.ToHexStringLower(await SHA256.HashDataAsync(file, ct));
         if (actual != expected)
-        {
-            File.Delete(path);
             throw new InvalidDataException("ダウンロードしたインストーラーのハッシュが一致しません。");
-        }
         return path;
+    }
+
+    private static void RemoveOldDownloads()
+    {
+        if (!Directory.Exists(DownloadRoot))
+            return;
+        var cutoff = DateTime.UtcNow - TimeSpan.FromDays(1);
+        foreach (var entry in new DirectoryInfo(DownloadRoot).EnumerateFileSystemInfos())
+        {
+            // Files directly in the folder are from versions that saved there.
+            if (entry is FileInfo || entry.LastWriteTimeUtc < cutoff)
+                TryDelete(entry.FullName);
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, true);
+            else File.Delete(path);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceWarning($"更新用の一時ファイルを消せませんでした。 {path} {error.Message}");
+        }
     }
 
     // Installs silently and relaunches the app afterwards (/RELAUNCH=1 in AecAudioRouter.iss). The caller closes the app.

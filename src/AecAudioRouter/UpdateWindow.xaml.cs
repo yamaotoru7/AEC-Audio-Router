@@ -36,7 +36,11 @@ public partial class UpdateWindow : Window
         {
             ProgressText.Text = $"{release.InstallerName} をダウンロードしています…";
             var progress = new Progress<double>(p => ProgressText.Text = $"{release.InstallerName} をダウンロードしています… {p:P0}");
-            InstallerPath = await Updater.DownloadAsync(release, progress, download.Token);
+            string installer = await Updater.DownloadAsync(release, progress, download.Token);
+            // Closed while the last step finished: DialogResult can no longer be set.
+            if (download.IsCancellationRequested)
+                return;
+            InstallerPath = installer;
             DialogResult = true;
         }
         catch (OperationCanceledException) when (download.IsCancellationRequested)

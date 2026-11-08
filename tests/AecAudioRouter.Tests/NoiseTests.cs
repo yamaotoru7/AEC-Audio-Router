@@ -156,6 +156,15 @@ internal static class NoiseTests
                 suppressor.Process(frame);
                 Require(frame.All(x => float.IsFinite(x) && Math.Abs(x) <= 1), $"{mode}: clipped input produced invalid output");
             }
+            // Clipped full-scale speech: the resamplers around GTCRN overshoot full scale.
+            var loud = Speech(300 * Frame, 77);
+            float scale = 2f / loud.Max(Math.Abs);
+            for (int n = 0; n < 300; n++)
+            {
+                for (int i = 0; i < Frame; i++) frame[i] = Math.Clamp(loud[n * Frame + i] * scale, -1f, 1f);
+                suppressor.Process(frame);
+                Require(frame.All(x => float.IsFinite(x) && Math.Abs(x) <= 1), $"{mode}: full-scale speech produced output beyond full scale");
+            }
             try { suppressor.Process(new float[Frame - 1]); throw new Exception("Invalid frame accepted"); }
             catch (ArgumentException) { }
             suppressor.Dispose();
@@ -166,6 +175,31 @@ internal static class NoiseTests
         string missing = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".onnx");
         try { using var _ = new DpdfnetSuppressor(missing); throw new Exception("Missing model accepted"); }
         catch (InvalidOperationException) { }
+        // A model that loads but does not match fails part way through construction.
+        try { using var _ = new DpdfnetSuppressor(GtcrnSuppressor.DefaultModelPath); throw new Exception("GTCRN model accepted as DPDFNet"); }
+        catch (InvalidOperationException) { }
+        try { using var _ = new GtcrnSuppressor(DpdfnetSuppressor.DefaultModelPath); throw new Exception("DPDFNet model accepted as GTCRN"); }
+        catch (InvalidOperationException) { }
+
+        // Switching while running keeps the previous engine only for InvalidOperationException.
+        foreach (Exception failure in new Exception[] { new DllNotFoundException(), new BadImageFormatException(),
+            new TypeInitializationException("Microsoft.ML.OnnxRuntime.NativeMethods", null), new FormatException() })
+        {
+            try { INoiseSuppressor.Load("test", () => throw failure); throw new Exception($"{failure.GetType().Name} escaped"); }
+            catch (InvalidOperationException error) when (error.InnerException == failure) { }
+        }
+
+        // libDF panics (ending the process) on a damaged archive, so it must be rejected first.
+        if (DeepFilterSuppressor.IsAvailable)
+        {
+            Require(DeepFilterSuppressor.ModelSha256.Length == 64, "The DeepFilterNet3 model hash is not embedded in the build");
+            string damaged = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".tar.gz");
+            byte[] model = File.ReadAllBytes(DeepFilterSuppressor.DefaultModelPath);
+            File.WriteAllBytes(damaged, model[..(model.Length / 2)]);
+            try { using var _ = new DeepFilterSuppressor(damaged); throw new Exception("Damaged DeepFilterNet3 model accepted"); }
+            catch (InvalidOperationException) { }
+            finally { File.Delete(damaged); }
+        }
     }
 
     // Matches a naive DFT for the 960-point STFT size and a few other factorizations.
@@ -198,6 +232,35 @@ internal static class NoiseTests
     {
         foreach (var mode in AvailableModes)
             CheckPipeline(mode);
+        foreach (var mode in AvailableModes)
+            CheckNoStaleAudioAfterCaptureRestart(mode);
+    }
+
+    // After a capture discontinuity, audio from before the gap must not come out of the
+    // noise suppressor's delay line.
+    private static void CheckNoStaleAudioAfterCaptureRestart(NoiseSuppressionMode mode)
+    {
+        var output = new RouteBuffer(Rate, Rate);
+        using var pipeline = new AecPipeline(Rate, Rate, output, new Meter()) { Enabled = false };
+        pipeline.SetNoiseSuppression(mode);
+        // 1.1 s ends inside a syllable, so the delay line holds speech at the gap.
+        var speech = Speech(110 * Frame, 41);
+        var read = new float[Frame];
+        for (int packet = 0; packet < 110; packet++)
+        {
+            pipeline.AddMicrophone(speech.AsSpan(packet * Frame, Frame), (packet + 1) * 0.01);
+            output.Read(read, 0, read.Length);
+        }
+        var silence = new float[Frame];
+        float peak = 0;
+        for (int packet = 0; packet < 30; packet++)
+        {
+            pipeline.AddMicrophone(silence, 5 + packet * 0.01);
+            output.Read(read, 0, read.Length);
+            peak = Math.Max(peak, read.Max(Math.Abs));
+        }
+        Require(pipeline.Status.Resets == 1, "Capture discontinuity did not reset");
+        Require(peak < 1e-3, $"{mode}: audio from before a capture restart was played after it (peak {peak:F4})");
     }
 
     private static void CheckPipeline(NoiseSuppressionMode mode)

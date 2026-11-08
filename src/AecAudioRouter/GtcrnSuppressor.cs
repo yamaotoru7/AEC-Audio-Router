@@ -58,27 +58,27 @@ internal sealed class GtcrnSuppressor : INoiseSuppressor
 
     public GtcrnSuppressor(string modelPath)
     {
-        if (!File.Exists(modelPath))
-            throw new InvalidOperationException($"GTCRN のモデルが見つかりません。 {modelPath}");
-        using var options = new SessionOptions
-        {
-            IntraOpNumThreads = 1,
-            InterOpNumThreads = 1,
-            ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
-            GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL
-        };
         try
         {
-            session = new InferenceSession(modelPath, options);
-        }
-        catch (OnnxRuntimeException error)
-        {
-            throw new InvalidOperationException($"GTCRN のモデルを読み込めませんでした。 {error.Message}", error);
-        }
-        down = new ResamplerHandle(Aec3Processor.SampleRate, ModelRate);
-        up = new ResamplerHandle(ModelRate, Aec3Processor.SampleRate);
-        try
-        {
+            if (!File.Exists(modelPath))
+                throw new InvalidOperationException($"GTCRN のモデルが見つかりません。 {modelPath}");
+            using var options = new SessionOptions
+            {
+                IntraOpNumThreads = 1,
+                InterOpNumThreads = 1,
+                ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
+                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL
+            };
+            try
+            {
+                session = new InferenceSession(modelPath, options);
+            }
+            catch (OnnxRuntimeException error)
+            {
+                throw new InvalidOperationException($"GTCRN のモデルを読み込めませんでした。 {error.Message}", error);
+            }
+            down = new ResamplerHandle(Aec3Processor.SampleRate, ModelRate);
+            up = new ResamplerHandle(ModelRate, Aec3Processor.SampleRate);
             if (down.IsInvalid || up.IsInvalid)
                 throw new InvalidOperationException("GTCRN 用のリサンプラーを作れませんでした。");
             if (!session.InputNames.SequenceEqual(InputNames) || !session.OutputNames.SequenceEqual(OutputNames))
@@ -90,12 +90,14 @@ internal sealed class GtcrnSuppressor : INoiseSuppressor
             enhancedValue = OrtValue.CreateTensorValueFromMemory(enhanced, spectrumShape);
             for (int set = 0; set < 2; set++)
             {
-                // Caches start at zero, as in the reference script.
-                caches[set] = InputNames.Skip(1).Select(name =>
+                // Caches start at zero, as in the reference script. Stored as each is
+                // created, so a failure part way still releases the ones before it.
+                caches[set] = new OrtValue[InputNames.Length - 1];
+                for (int c = 0; c < caches[set].Length; c++)
                 {
-                    long[] shape = session.InputMetadata[name].Dimensions.Select(d => (long)d).ToArray();
-                    return OrtValue.CreateTensorValueFromMemory(new float[shape.Aggregate(1L, (a, b) => a * b)], shape);
-                }).ToArray();
+                    long[] shape = session.InputMetadata[InputNames[c + 1]].Dimensions.Select(d => (long)d).ToArray();
+                    caches[set][c] = OrtValue.CreateTensorValueFromMemory(new float[shape.Aggregate(1L, (a, b) => a * b)], shape);
+                }
             }
             for (int d = 0; d < 2; d++)
             {
@@ -105,13 +107,8 @@ internal sealed class GtcrnSuppressor : INoiseSuppressor
         }
         catch
         {
-            foreach (var value in caches.Where(c => c is not null).SelectMany(c => c)) value.Dispose();
-            spectrumValue?.Dispose();
-            enhancedValue?.Dispose();
-            down.Dispose();
-            up.Dispose();
-            session.Dispose();
-            run.Dispose();
+            // Releases whatever was created before the failure (the rest is still null).
+            Dispose();
             throw;
         }
     }
@@ -154,18 +151,21 @@ internal sealed class GtcrnSuppressor : INoiseSuppressor
         Array.Copy(output, Block, output, 0, outputCount);
         if (Aec3Native.aec3_resample(up, block, Block, frame) != frame.Length)
             throw new InvalidOperationException("GTCRN 用のリサンプリングに失敗しました。");
+        // The sinc upsampler can overshoot full scale on loud speech.
+        for (int n = 0; n < frame.Length; n++)
+            frame[n] = float.IsFinite(frame[n]) ? Math.Clamp(frame[n], -1f, 1f) : 0f;
     }
 
     public void Dispose()
     {
         if (disposed) return;
         disposed = true;
-        foreach (var value in caches.SelectMany(c => c)) value.Dispose();
-        spectrumValue.Dispose();
-        enhancedValue.Dispose();
-        down.Dispose();
-        up.Dispose();
+        foreach (var value in caches.Where(c => c is not null).SelectMany(c => c)) value?.Dispose();
+        spectrumValue?.Dispose();
+        enhancedValue?.Dispose();
+        down?.Dispose();
+        up?.Dispose();
         run.Dispose();
-        session.Dispose();
+        session?.Dispose();
     }
 }

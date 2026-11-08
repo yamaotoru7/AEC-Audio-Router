@@ -27,6 +27,8 @@
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="$(OnnxRuntimeVersion)" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
     <InternalsVisibleTo Include="AecAudioRouter.Tests" />
+    <!-- DeepFilterSuppressor checks the model against this before libDF reads it. -->
+    <AssemblyMetadata Include="DeepFilterSha256" Value="$(DeepFilterSha256)" />
     <Resource Include="Assets\AppIcon.ico" />
   </ItemGroup>
   <ItemGroup>

@@ -129,6 +129,67 @@ internal static class AecTests
         pipeline.AddMicrophone(mic, 13);
     }
 
+    // Loopback delivers no packets while nothing plays. A pause longer than the alignment
+    // buffer but shorter than the 100 ms discontinuity limit must not leave the reference
+    // stamped in the past (it would then arrive too late for every microphone frame).
+    public static void PipelineKeepsCancellingAfterShortReferencePauses()
+    {
+        const int seconds = 30;
+        var random = new Random(51);
+        var far = new float[seconds * Rate];
+        float state = 0;
+        for (int i = 0; i < far.Length; i++)
+        {
+            state = 0.85f * state + 0.15f * (float)(random.NextDouble() * 2 - 1);
+            far[i] = state * 0.6f;
+        }
+        // Pauses of 30, 60 and 90 ms: the render stream is silent, so loopback sends nothing.
+        (double Start, double Length)[] pauses = [(8, 0.03), (15, 0.06), (22, 0.09)];
+        bool Paused(int frame) => pauses.Any(p => frame * 0.01 >= p.Start && frame * 0.01 < p.Start + p.Length);
+        for (int frame = 0; frame < seconds * 100; frame++)
+            if (Paused(frame)) Array.Clear(far, frame * 480, 480);
+
+        int delay = Rate * 50 / 1000;
+        var output = new RouteBuffer(Rate, Rate);
+        using var pipeline = new AecPipeline(Rate, Rate, output, new Meter());
+        var mic = new float[480];
+        var read = new float[480];
+        var input = new double[pauses.Length];
+        var routed = new double[pauses.Length];
+        for (int frame = 0; frame < seconds * 100; frame++)
+        {
+            int start = frame * 480;
+            double time = (frame + 1) * 0.01;
+            if (!Paused(frame))
+                pipeline.AddReference(far.AsSpan(start, 480), time + 0.003 + (frame % 3) * 0.001);
+            for (int i = 0; i < 480; i++) mic[i] = start + i >= delay ? 0.6f * far[start + i - delay] : 0;
+            pipeline.AddMicrophone(mic, time + 0.004);
+            output.Read(read, 0, read.Length);
+            // Measure 2 to 6 seconds after each pause.
+            for (int p = 0; p < pauses.Length; p++)
+                if (time >= pauses[p].Start + 2 && time < pauses[p].Start + 6)
+                {
+                    input[p] += mic.Sum(x => (double)x * x);
+                    routed[p] += read.Sum(x => (double)x * x);
+                }
+        }
+        for (int p = 0; p < pauses.Length; p++)
+        {
+            double erle = 10 * Math.Log10(input[p] / Math.Max(1e-20, routed[p]));
+            Console.WriteLine($"Pipeline after a {pauses[p].Length * 1000:F0} ms reference pause: echo reduction={erle:F1} dB");
+            Require(erle > 15, $"Echo cancellation did not recover after a {pauses[p].Length * 1000:F0} ms reference pause");
+        }
+        Require(pipeline.Status.Missing < 100, $"Reference stayed missing after short pauses ({pipeline.Status.Missing} frames)");
+
+        // A device period of arrival jitter (audio is released in 10 ms periods) is not a gap.
+        using var stream = new AudioFrameStream(Rate);
+        var jitter = new Random(3);
+        var packet = new float[480];
+        for (int i = 0; i < 6000; i++)
+            stream.Push(packet, (i + 1) * 0.01 + jitter.NextDouble() * 0.01, _ => { });
+        Require(stream.Discontinuities == 0, $"10 ms of arrival jitter was taken as a gap ({stream.Discontinuities} resets)");
+    }
+
     public static void PipelineBypassRoutesRawMicrophoneAndKeepsAdapting()
     {
         var random = new Random(7);

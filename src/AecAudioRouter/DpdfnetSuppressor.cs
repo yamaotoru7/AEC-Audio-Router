@@ -34,7 +34,11 @@ internal sealed class DpdfnetSuppressor : INoiseSuppressor
     private readonly OrtValue enhancedValue;
     private readonly OrtValue stateAValue;
     private readonly OrtValue stateBValue;
-    private bool stateInA = true;
+    // Run arguments for each direction of the state swap, built once so the audio
+    // thread does not allocate.
+    private readonly OrtValue[][] inputs = new OrtValue[2][];
+    private readonly OrtValue[][] outputs = new OrtValue[2][];
+    private int direction;
     private readonly StreamingStft stft = new(StreamingStft.VorbisWindow(Window));
     private bool disposed;
 
@@ -44,26 +48,27 @@ internal sealed class DpdfnetSuppressor : INoiseSuppressor
 
     public DpdfnetSuppressor(string modelPath)
     {
-        if (!File.Exists(modelPath))
-            throw new InvalidOperationException($"DPDFNet のモデルが見つかりません。 {modelPath}");
-        using var options = new SessionOptions
-        {
-            // One frame is a small graph; extra threads only add wake-up latency.
-            IntraOpNumThreads = 1,
-            InterOpNumThreads = 1,
-            ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
-            GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL
-        };
         try
         {
-            session = new InferenceSession(modelPath, options);
-        }
-        catch (OnnxRuntimeException error)
-        {
-            throw new InvalidOperationException($"DPDFNet のモデルを読み込めませんでした。 {error.Message}", error);
-        }
-        try
-        {
+            if (!File.Exists(modelPath))
+                throw new InvalidOperationException($"DPDFNet のモデルが見つかりません。 {modelPath}");
+            using var options = new SessionOptions
+            {
+                // One frame is a small graph; extra threads only add wake-up latency.
+                IntraOpNumThreads = 1,
+                InterOpNumThreads = 1,
+                ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
+                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL
+            };
+            try
+            {
+                session = new InferenceSession(modelPath, options);
+            }
+            catch (OnnxRuntimeException error)
+            {
+                throw new InvalidOperationException($"DPDFNet のモデルを読み込めませんでした。 {error.Message}", error);
+            }
+
             var meta = session.ModelMetadata.CustomMetadataMap;
             string Meta(string key) => meta.TryGetValue(key, out var value) ? value
                 : throw new InvalidOperationException($"DPDFNet のモデルに {key} がありません。");
@@ -92,11 +97,15 @@ internal sealed class DpdfnetSuppressor : INoiseSuppressor
             enhancedValue = OrtValue.CreateTensorValueFromMemory(enhanced, spectrumShape);
             stateAValue = OrtValue.CreateTensorValueFromMemory(stateA, stateShape);
             stateBValue = OrtValue.CreateTensorValueFromMemory(stateB, stateShape);
+            inputs[0] = [spectrumValue, stateAValue];
+            outputs[0] = [enhancedValue, stateBValue];
+            inputs[1] = [spectrumValue, stateBValue];
+            outputs[1] = [enhancedValue, stateAValue];
         }
         catch
         {
-            session.Dispose();
-            run.Dispose();
+            // Releases whatever was created before the failure (the rest is still null).
+            Dispose();
             throw;
         }
     }
@@ -109,17 +118,15 @@ internal sealed class DpdfnetSuppressor : INoiseSuppressor
 
         stft.Analyze(frame, spectrum);
 
-        var stateIn = stateInA ? stateAValue : stateBValue;
-        var stateOut = stateInA ? stateBValue : stateAValue;
         try
         {
-            session.Run(run, inputNames, [spectrumValue, stateIn], outputNames, [enhancedValue, stateOut]);
+            session.Run(run, inputNames, inputs[direction], outputNames, outputs[direction]);
         }
         catch (OnnxRuntimeException error)
         {
             throw new InvalidOperationException($"DPDFNet の音声処理に失敗しました。 {error.Message}", error);
         }
-        stateInA = !stateInA;
+        direction = 1 - direction;
         stft.Synthesize(enhanced, frame);
     }
 
@@ -127,11 +134,11 @@ internal sealed class DpdfnetSuppressor : INoiseSuppressor
     {
         if (disposed) return;
         disposed = true;
-        spectrumValue.Dispose();
-        enhancedValue.Dispose();
-        stateAValue.Dispose();
-        stateBValue.Dispose();
+        spectrumValue?.Dispose();
+        enhancedValue?.Dispose();
+        stateAValue?.Dispose();
+        stateBValue?.Dispose();
         run.Dispose();
-        session.Dispose();
+        session?.Dispose();
     }
 }

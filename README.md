@@ -91,7 +91,7 @@ dotnet .\tests\AecAudioRouter.Tests\bin\Release\net10.0-windows\AecAudioRouter.T
 - 30 / 100 / 200 ms の遅延と反射を加えた合成エコーの抑圧（20 dB 以上）。
 - ダブルトーク時の合成有声音との相関・ゲイン、参照が無音のときの近端音声保持。
 - 8 / 16 / 44.1 / 48 / 96 / 192 kHz の入力、不定長パケット、ダウンサンプリング時の折り返し抑制。
-- 参照の2秒間の停止・再開、マイクの不連続、二重破棄と破棄後の呼び出し。
+- 参照の2秒間の停止・再開、30 / 60 / 90 ms の短い停止の後のエコー抑圧、マイクの不連続、二重破棄と破棄後の呼び出し。
 - 44.1 / 48 kHz の異なる入力レート、到着ジッター、±150 ppm のクロック差を含む90秒の合成経路。
 - ノイズ除去（軽量・高品質・ASR・DFN3 のそれぞれ。DFN3 はビルドしたときだけ、ハムなしのノイズで）：合成ノイズだけの区間の抑圧（12 dB 以上）、ノイズに重ねた合成有声音の保持（相関とゲイン）、遅延が20 ms / 50 ms / 33 ms / 30 msであること、無音・クリップ・不正なフレーム、モデルが無いときのエラー。STFT 用の FFT は素朴な DFT と比べます。
 - AEC3 とノイズ除去を重ねた経路：エコー除去に上乗せしてノイズを抑えること、AEC を OFF にしても効くこと、ノイズ除去の OFF で信号を変えないこと、出力中の切り替え。
@@ -128,4 +128,4 @@ dotnet .\tests\AecAudioRouter.Tests\bin\Release\net10.0-windows\AecAudioRouter.T
 
 比較のために [DeepFilterNet3](https://github.com/Rikorose/DeepFilterNet)（MIT / Apache-2.0）を作者のストリーミング実装 libDF（Rust、推論は tract）の C API で動かします。公式の ONNX はモデルが3つに分かれ、再帰の状態を外に出さないため、1フレームずつの処理には使えません。
 
-`native/build-deepfilternet.ps1` が固定したコミットのソースを取得し、`native/deepfilternet/Cargo.lock` で依存を固定して `deepfilter.dll` をビルドします。Rust のツールチェーン 1.91.0 が無い場合は警告を出して飛ばし、アプリでは「DFN3」を選べなくなります（`rustup toolchain install 1.91.0 --profile minimal`）。モデル `DeepFilterNet3_onnx.tar.gz` は、DLL をビルドできたときだけ取得して同梱します。libDF は内部のエラーでプロセスを止めるため（Rust の panic は C API を越えられない）、モデルのファイルを渡す前に確かめます。
+`native/build-deepfilternet.ps1` が固定したコミットのソースを取得し、`native/deepfilternet/Cargo.lock` で依存を固定して `deepfilter.dll` をビルドします。Rust のツールチェーン 1.91.0 が無い場合は警告を出して飛ばし、アプリでは「DFN3」を選べなくなります（`rustup toolchain install 1.91.0 --profile minimal`）。モデル `DeepFilterNet3_onnx.tar.gz` は、DLL をビルドできたときだけ取得して同梱します。libDF は内部のエラーでプロセスを止めるため（Rust の panic は C API を越えられない）、モデルのファイルを渡す前に、ビルドが取得時に照合したのと同じ SHA-256 で確かめます。壊れたモデルは読み込まずにエラーにします。

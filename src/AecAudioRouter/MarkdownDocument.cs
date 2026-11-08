@@ -132,9 +132,15 @@ internal static partial class MarkdownDocument
                 AddInlines(italic.Inlines, match.Groups["italic"].Value, accent, codeBackground);
                 target.Add(italic);
             }
+            else if (!Uri.TryCreate(match.Groups["url"].Value, UriKind.Absolute, out var uri)
+                || uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            {
+                // The pattern only looks like a URL (e.g. "https://["): keep the text as written.
+                target.Add(new Run(match.Value));
+            }
             else
             {
-                var link = new Hyperlink { NavigateUri = new Uri(match.Groups["url"].Value), Foreground = accent };
+                var link = new Hyperlink { NavigateUri = uri, Foreground = accent };
                 AddInlines(link.Inlines, match.Groups["label"].Value, accent, codeBackground);
                 link.RequestNavigate += (_, e) => OpenLink(e.Uri);
                 target.Add(link);

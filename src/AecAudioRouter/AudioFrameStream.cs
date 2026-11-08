@@ -7,6 +7,9 @@ internal sealed record AudioFrame(double Time, float[] Samples);
 // A slowly corrected sample clock rejects scheduling jitter and follows drift.
 internal sealed class AudioFrameStream : IDisposable
 {
+    // A device period (10 ms) of arrival jitter fits well inside the late limit.
+    public const double MaxLateSeconds = 0.02;
+    public const double MaxEarlySeconds = 0.1;
     private readonly int sampleRate;
     private readonly float[] input;
     private ResamplerHandle? resampler;
@@ -42,7 +45,12 @@ internal sealed class AudioFrameStream : IDisposable
         double observedStart = arrivalTime - (double)samples.Length / sampleRate;
         if (double.IsNaN(nextTime)) nextTime = observedStart;
         double error = observedStart - (nextTime + (double)used / sampleRate);
-        if (Math.Abs(error) > 0.1)
+        // Samples that start later than expected mean the device sent nothing for a while
+        // (loopback does this while nothing plays), so resynchronize after a short gap:
+        // a stale clock would stamp the new audio in the past, and once that exceeds
+        // AecPipeline.AlignmentDelayMs every reference frame arrives too late to be used.
+        // Early samples can only be scheduling jitter, so allow more before resetting.
+        if (error > MaxLateSeconds || error < -MaxEarlySeconds)
         {
             used = 0;
             nextTime = observedStart;

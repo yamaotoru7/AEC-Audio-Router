@@ -57,11 +57,10 @@ if(MSVC)
   # The extracted audio_buffer.cc uses std::array without including its header.
   set_source_files_properties("${ROOT}/audio_processing/audio_buffer.cc" PROPERTIES COMPILE_OPTIONS /FIarray)
   target_compile_options(Aec3Native PRIVATE /W3 /EHsc /utf-8)
-  foreach(SOURCE IN LISTS SOURCES)
-    if(SOURCE MATCHES "_avx2\\.cc$")
-      set_source_files_properties("${SOURCE}" PROPERTIES COMPILE_OPTIONS /arch:AVX2)
-    endif()
-  endforeach()
+  # No /arch:AVX2 for the *_avx2.cc files: MSVC compiles their intrinsics without it, and
+  # with it the inline functions they share with the rest (std::fill, std::span, ...) could
+  # be linked in their AVX2 build and crash CPUs without AVX2. The extracted
+  # cpu_info::Supports always returns false, so these AVX2 paths are never called anyway.
 endif()
 target_link_libraries(Aec3Native PRIVATE winmm rnnoise)
 set_target_properties(Aec3Native PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/out/$<CONFIG>")
