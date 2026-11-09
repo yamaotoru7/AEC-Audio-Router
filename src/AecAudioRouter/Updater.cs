@@ -23,6 +23,7 @@ internal static class Updater
     // Inno Setup writes the uninstall entry as "<AppId>_is1" (AppId in installer/AecAudioRouter.iss).
     private const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{84EEF39B-A016-4925-8D16-B80D564559E5}_is1";
     private const string LatestApi = "https://api.github.com/repos/" + Repository + "/releases/latest";
+    private const string ReleasesApi = "https://api.github.com/repos/" + Repository + "/releases?per_page=100";
 
     private static readonly HttpClient Http = CreateClient();
 
@@ -70,6 +71,60 @@ internal static class Updater
         response.EnsureSuccessStatusCode();
         using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
         return Parse(json.RootElement);
+    }
+
+    // The latest release with its notes replaced by those of every release after `current` up to it,
+    // newest first, so skipping versions does not hide what changed in between. When the list
+    // cannot be read, the latest release's own notes are kept.
+    public static async Task<ReleaseInfo> WithNotesSinceAsync(ReleaseInfo latest, Version current, CancellationToken ct)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, ReleasesApi);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            using var response = await Http.SendAsync(request, ct);
+            response.EnsureSuccessStatusCode();
+            using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            if (json.RootElement.ValueKind != JsonValueKind.Array)
+                return latest;
+            var notes = json.RootElement.EnumerateArray().Select(ParseNotes).OfType<(Version, string)>().ToList();
+            return latest with { Notes = CombineNotes(notes, latest, current) };
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or OperationCanceledException or JsonException)
+        {
+            Trace.TraceWarning($"途中の版のリリースノートを読めませんでした。 {error.Message}");
+            return latest;
+        }
+    }
+
+    // Notes of the releases in (current, latest], newest first, each under a "## <version>" heading
+    // (its own "AEC Audio Router <version>。" line is dropped). One release keeps its notes as they are.
+    internal static string CombineNotes(IEnumerable<(Version Version, string Notes)> releases, ReleaseInfo latest, Version current)
+    {
+        var picked = releases.Where(r => r.Version > current && r.Version < latest.Version)
+            .Append((latest.Version, latest.Notes))
+            .GroupBy(r => r.Version).Select(g => g.Last())
+            .OrderByDescending(r => r.Version).ToList();
+        if (picked.Count == 1)
+            return latest.Notes;
+        return string.Join("\n\n", picked.Select(r =>
+        {
+            var lines = r.Notes.Split('\n').ToList();
+            if (lines.Count > 0 && lines[0].Trim().TrimEnd('。', '.') == $"AEC Audio Router {r.Version}")
+                lines.RemoveAt(0);
+            string body = string.Join("\n", lines).Trim();
+            return body.Length > 0 ? $"## {r.Version}\n\n{body}" : $"## {r.Version}";
+        }));
+    }
+
+    // A published release's version and notes (no installer needed: only its notes are shown).
+    internal static (Version Version, string Notes)? ParseNotes(JsonElement release)
+    {
+        if (release.ValueKind != JsonValueKind.Object || Bool(release, "draft") || Bool(release, "prerelease"))
+            return null;
+        if (!Version.TryParse(Text(release, "tag_name").TrimStart('v', 'V'), out var version))
+            return null;
+        return (version, Text(release, "body").Replace("\r\n", "\n").Trim());
     }
 
     // GitHub's release JSON → ReleaseInfo. Drafts, pre-releases, unreadable tags and releases without the installer and its .sha256 are skipped.

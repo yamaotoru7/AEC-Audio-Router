@@ -54,6 +54,9 @@
                     <TextBlock Text="AEC Audio Router" FontSize="28" FontWeight="SemiBold" FontFamily="Segoe UI"/>
                     <TextBlock x:Name="VersionText" Style="{StaticResource Caption}" FontFamily="Segoe UI" FontSize="13"
                         Margin="10,0,0,5" VerticalAlignment="Bottom"/>
+                    <Button x:Name="UpdateButton" Click="UpdateClick" Content="更新を確認" FontSize="12"
+                        Padding="9,2" MinHeight="0" Margin="10,0,0,3" VerticalAlignment="Bottom"
+                        ToolTip="GitHub のリリースに新しい版があるか確認します。"/>
                 </StackPanel>
                 <TextBlock Text="Windows オーディオルーター" Style="{StaticResource Caption}" Margin="1,3,0,0"/>
             </StackPanel>
@@ -252,8 +255,9 @@
                 <TextBlock x:Name="Status" Grid.Column="1" Margin="17,0,16,0" Style="{StaticResource Caption}" VerticalAlignment="Center"
                     AutomationProperties.LiveSetting="Polite"/>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
-                    <Button x:Name="UpdateButton" Click="UpdateClick" Content="更新を確認" FontSize="12" Margin="0,0,16,0"
-                        ToolTip="GitHub のリリースに新しい版があるか確認します。"/>
+                    <Button x:Name="ListenBackButton" Click="ListenBackClick" Content="聞き返す (_L)" FontSize="12" Margin="0,0,16,0"
+                        IsEnabled="False" ToolTipService.ShowOnDisabled="True"
+                        ToolTip="停止前の 30 秒を、エコー除去とノイズ除去の前と後で聞き比べます。出力を開始して停止すると使えます。"/>
                     <Button x:Name="StopButton" Click="StopClick" Content="停止" MinWidth="78" Margin="0,0,8,0" IsEnabled="False"/>
                     <Button x:Name="StartButton" Click="StartClick" Content="開始" MinWidth="94" Style="{StaticResource Primary}"/>
                 </StackPanel>

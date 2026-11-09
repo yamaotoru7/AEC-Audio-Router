@@ -1,3 +1,5 @@
+using System.IO;
+
 namespace AecAudioRouter.Tests;
 
 internal static class AecTests
@@ -43,9 +45,24 @@ internal static class AecTests
             }
             double erle = 10 * Math.Log10(Energy(mixed, 8 * Rate, 4 * Rate) / Math.Max(1e-20, Energy(processed, 8 * Rate, 4 * Rate)));
             var (gain, correlation, lag) = Match(near, processed, 14 * Rate, 3 * Rate);
+            WriteListeningFiles($"aec-{delayMs}ms", far, mixed, processed);
             Console.WriteLine($"AEC3 delay={delayMs} ms: echo reduction={erle:F1} dB, double-talk gain={gain:F3}, correlation={correlation:F3}, lag={lag} samples");
             Require(erle > 20, "Delayed echo reduction must exceed 20 dB");
             Require(gain > 0.5 && gain < 1.3 && correlation > 0.8, "Double-talk near-end signal was not preserved");
+        }
+    }
+
+    // Set AEC_TEST_WAV_DIR to keep the reference, microphone and AEC output as 48 kHz mono WAV files for listening.
+    public static void WriteListeningFiles(string name, float[] reference, float[] microphone, float[] output)
+    {
+        string? directory = Environment.GetEnvironmentVariable("AEC_TEST_WAV_DIR");
+        if (string.IsNullOrEmpty(directory)) return;
+        Directory.CreateDirectory(directory);
+        foreach (var (suffix, samples) in new[] { ("1-reference", reference), ("2-microphone", microphone), ("3-output", output) })
+        {
+            using var writer = new NAudio.Wave.WaveFileWriter(Path.Combine(directory, $"{name}-{suffix}.wav"),
+                NAudio.Wave.WaveFormat.CreateIeeeFloatWaveFormat(Rate, 1));
+            writer.WriteSamples(samples, 0, samples.Length);
         }
     }
 

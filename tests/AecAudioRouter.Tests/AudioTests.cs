@@ -21,6 +21,7 @@ internal static class AudioTests
             ReferenceOutputCannotBeTheMicrophoneRouteDestination,
             SettingsRoundTripAndFallBackWhenMissingOrCorrupt,
             UpdaterTests.ParsesGitHubReleaseAndComparesVersions,
+            UpdaterTests.CombinesNotesOfSkippedVersions,
             UpdaterTests.RendersReleaseNotesMarkdown,
             UpdaterTests.DownloadsVerifiesAndGivesUpOnAStalledBody,
             AecTests.CancelsDelayedEchoAndPreservesDoubleTalk,
@@ -36,10 +37,14 @@ internal static class AudioTests
             NoiseTests.GtcrnSuppressesNoiseAndKeepsSpeech,
             NoiseTests.DeepFilterNet3SuppressesNoiseAndKeepsSpeech,
             NoiseTests.RejectsInvalidFramesAndSurvivesSilenceAndClipping,
-            NoiseTests.PipelineSuppressesNoiseAfterAecAndSwitchesWhileRunning
+            NoiseTests.PipelineSuppressesNoiseAfterAecAndSwitchesWhileRunning,
+            ListenBackTests.RecorderKeepsTheLastSecondsAligned,
+            ListenBackTests.SourceSwitchesTracksAtTheSamePosition,
+            ListenBackTests.PipelineRecordsBothTracksInStep,
+            ListenBackTests.PipelineWithoutOutputStillRecords
         ];
         int failures = 0;
-        foreach (var test in args.Contains("--wpf") ? tests.Append(WpfWindowLoads).Append(WpfWindowRestoresAndSavesSettings) : tests)
+        foreach (var test in args.Contains("--wpf") ? tests.Append(WpfWindowLoads).Append(WpfWindowRestoresAndSavesSettings).Append(WpfListenBackSwitchesTracks) : tests)
         {
             try
             {
@@ -80,6 +85,38 @@ internal static class AudioTests
         finally
         {
             if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
+    private static void WpfListenBackSwitchesTracks()
+    {
+        var main = new MainWindow(null);
+        try
+        {
+            // Nothing recorded yet.
+            Equal(false, ((Button)main.FindName("ListenBackButton")).IsEnabled);
+            Equal(null, main.Recording);
+        }
+        finally
+        {
+            main.Close();
+        }
+
+        var samples = new float[12 * ListenBackRecording.SampleRate];
+        var window = new ListenBackWindow(new ListenBackRecording(samples, (float[])samples.Clone()), processed: false);
+        try
+        {
+            Equal("停止前の 12 秒", ((TextBlock)window.FindName("Headline")).Text);
+            Equal("0:00 / 0:12", ((TextBlock)window.FindName("TimeText")).Text);
+            Equal(true, ((RadioButton)window.FindName("BeforeLane")).IsChecked);
+            Equal(false, window.Processed);
+            ((RadioButton)window.FindName("AfterLane")).IsChecked = true;
+            Equal(true, window.Processed);
+            Equal(false, ((RadioButton)window.FindName("BeforeLane")).IsChecked);
+        }
+        finally
+        {
+            window.Close();
         }
     }
 
@@ -246,6 +283,8 @@ internal static class AudioTests
         ExpectInvalid(settings with { Mode = ReferenceMode.Input, ReferenceEndpoint = "mic", ReferenceChannel = 1, MicrophoneChannel = 1 });
         (settings with { Mode = ReferenceMode.Input, ReferenceEndpoint = "mic", ReferenceChannel = 1, MicrophoneChannel = 2 }).Validate();
         (settings with { Output = "cable" }).Validate();
+        (settings with { Output = Endpoint.None.Id }).Validate();
+        (settings with { Mode = ReferenceMode.File, Output = Endpoint.None.Id }).Validate();
     }
 
     private static void ExpectInvalid(RouteSettings settings)

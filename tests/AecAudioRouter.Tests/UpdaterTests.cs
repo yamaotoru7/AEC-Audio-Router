@@ -55,6 +55,30 @@ internal static class UpdaterTests
         Check(Updater.IsDue(now.AddHours(-25), now), "checked over a day ago");
     }
 
+    // Updating from 0.2.4 to 0.2.7 shows the notes of 0.2.7, 0.2.6 and 0.2.5, newest first.
+    public static void CombinesNotesOfSkippedVersions()
+    {
+        const string json = """
+            [
+              { "tag_name": "v0.2.7", "draft": false, "prerelease": false, "body": "AEC Audio Router 0.2.7。\r\n\r\n- **c**：7" },
+              { "tag_name": "v0.2.6", "draft": false, "prerelease": false, "body": "AEC Audio Router 0.2.6。\r\n\r\n- **b**：6" },
+              { "tag_name": "v0.2.6-rc", "draft": false, "prerelease": true, "body": "rc" },
+              { "tag_name": "v0.2.8", "draft": true, "prerelease": false, "body": "draft" },
+              { "tag_name": "v0.2.5", "draft": false, "prerelease": false, "body": "- **a**：5" },
+              { "tag_name": "v0.2.4", "draft": false, "prerelease": false, "body": "AEC Audio Router 0.2.4。\n\n- old" }
+            ]
+            """;
+        using var doc = JsonDocument.Parse(json);
+        var notes = doc.RootElement.EnumerateArray().Select(Updater.ParseNotes).OfType<(Version, string)>().ToList();
+        Check(notes.Count == 4, $"published releases: {notes.Count}");
+        var latest = new ReleaseInfo(new Version(0, 2, 7), "v0.2.7", "AEC Audio Router 0.2.7。\n\n- **c**：7", "", "x-setup.exe", "", "");
+
+        string combined = Updater.CombineNotes(notes, latest, new Version(0, 2, 4));
+        Check(combined == "## 0.2.7\n\n- **c**：7\n\n## 0.2.6\n\n- **b**：6\n\n## 0.2.5\n\n- **a**：5", $"combined notes: {combined}");
+        // Only the latest is new: its notes stay as published.
+        Check(Updater.CombineNotes(notes, latest, new Version(0, 2, 6)) == latest.Notes, "single release");
+    }
+
     private static JsonElement Mutate(string json, string from, string to) =>
         JsonDocument.Parse(json.Replace(from, to)).RootElement.Clone();
 

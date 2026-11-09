@@ -53,6 +53,19 @@ internal interface INoiseSuppressor : IDisposable
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };
 
+    // How far the output of each engine lags its input.
+    public static int DelayOf(NoiseSuppressionMode mode) => mode switch
+    {
+        NoiseSuppressionMode.Light => RnnoiseSuppressor.DelaySamples,
+        NoiseSuppressionMode.HighQuality => DpdfnetSuppressor.DelaySamples,
+        NoiseSuppressionMode.Speech16k => GtcrnSuppressor.DelaySamples,
+        NoiseSuppressionMode.DeepFilterNet3 => DeepFilterSuppressor.DelaySamples,
+        _ => 0
+    };
+
+    // The longest of them (DPDFNet, 50 ms).
+    public const int MaxDelaySamples = DpdfnetSuppressor.DelaySamples;
+
     internal static INoiseSuppressor Load(string name, Func<INoiseSuppressor> create)
     {
         try

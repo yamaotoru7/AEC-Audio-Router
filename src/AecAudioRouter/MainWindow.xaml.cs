@@ -24,6 +24,9 @@ public partial class MainWindow : Window
     private TimeSpan previousCpu;
     private long previousCpuTime;
     private double? cpuPercent;
+    private ListenBackRecording? recording;
+    // The track chosen last in the listen-back window.
+    private bool listenProcessed = true;
 
     private ReferenceMode Mode => (ReferenceMode)ReferenceKind.SelectedIndex;
 
@@ -84,6 +87,7 @@ public partial class MainWindow : Window
             SaveSettings();
             if (latest is not null && Updater.IsNewer(latest, Updater.CurrentVersion))
             {
+                latest = await Updater.WithNotesSinceAsync(latest, Updater.CurrentVersion, timeout.Token);
                 availableUpdate = latest;
                 UpdateButton.Style = (Style)FindResource("Primary");
                 UpdateButton.ToolTip = $"AEC Audio Router {latest.Version} があります（現在 {Updater.CurrentVersion}）。";
@@ -147,10 +151,10 @@ public partial class MainWindow : Window
             inputs = capture;
             outputs = render;
             SetDevices(MicDevice, inputs, mic);
-            SetDevices(OutputDevice, outputs, output);
+            SetDevices(OutputDevice, [Endpoint.None, .. outputs], output);
             SetReferenceDevices(reference);
 
-            StartButton.IsEnabled = inputs.Length != 0 && outputs.Length != 0;
+            StartButton.IsEnabled = inputs.Length != 0;
             Status.Text = $"デバイス  入力 {inputs.Length}  ·  出力 {outputs.Length}";
         }
         catch (Exception error)
@@ -241,8 +245,10 @@ public partial class MainWindow : Window
             previousCpuTime = Stopwatch.GetTimestamp();
             cpuPercent = null;
             session = pending;
+            recording = null;
             SetRunning(true);
-            Status.Text = $"{(IsAecOn ? "AEC3" : "AEC3 無効")}  ·  {session.SampleRate / 1000.0:0.###} kHz  ·  モノラル  ·  同期用バッファ {AecPipeline.AlignmentDelayMs} ms";
+            Status.Text = $"{(IsAecOn ? "AEC3" : "AEC3 無効")}  ·  {session.SampleRate / 1000.0:0.###} kHz  ·  モノラル  ·  同期用バッファ {AecPipeline.AlignmentDelayMs} ms"
+                + (session.Routed ? "" : "  ·  出力なし（聞き返し用に録音のみ）");
             timer.Start();
             SaveSettings();
         }
@@ -261,17 +267,33 @@ public partial class MainWindow : Window
         var previous = session;
         session = null;
         previous?.Dispose();
+        // Kept from a failed start, otherwise replaced by what the stopped session recorded.
+        if (previous is not null)
+            recording = previous.ListenBack.Snapshot();
         SetRunning(false);
         ResetMeters();
         Status.Text = message;
+    }
+
+    internal ListenBackRecording? Recording => recording;
+
+    private void ListenBackClick(object sender, RoutedEventArgs e)
+    {
+        if (session is not null || recording is not { } recorded)
+            return;
+        // Modal: the session cannot start while the recording plays (it would reach the microphone).
+        var window = new ListenBackWindow(recorded, listenProcessed) { Owner = this };
+        window.ShowDialog();
+        listenProcessed = window.Processed;
     }
 
     private void SetRunning(bool running)
     {
         Settings.IsEnabled = !running;
         ReloadButton.IsEnabled = !running;
-        StartButton.IsEnabled = !running && inputs.Length != 0 && outputs.Length != 0;
+        StartButton.IsEnabled = !running && inputs.Length != 0;
         StopButton.IsEnabled = running;
+        ListenBackButton.IsEnabled = !running && recording is not null;
         StateLabel.Text = running ? "出力中" : "停止中";
         UpdateAecState();
     }
@@ -331,8 +353,9 @@ public partial class MainWindow : Window
 
         CpuValue.Text = cpuPercent.HasValue ? $"{cpuPercent.Value:F2}%" : "—";
         ProcessingValue.Text = callback.HasValue ? $"{callback.Value:F3} ms" : "—";
-        QueueValue.Text = $"{queued:F1} ms";
-        BufferStats.Text = $"バッファ要求 {AudioSession.RequestedOutputMs} ms  ·  廃棄 {dropped:N0} / 無音補完 {missing:N0} サンプル";
+        QueueValue.Text = queued is { } q ? $"{q:F1} ms" : "—";
+        BufferStats.Text = queued is null ? "マイクの出力先：なし"
+            : $"バッファ要求 {AudioSession.RequestedOutputMs} ms  ·  廃棄 {dropped:N0} / 無音補完 {missing:N0} サンプル";
         var aecStats = active.AecStatus;
         BufferStats.Text += $"\n参照欠落 {aecStats.Missing:N0} / 同期廃棄 {aecStats.Dropped:N0} フレーム  ·  AEC 再同期 {aecStats.Resets:N0}";
     }

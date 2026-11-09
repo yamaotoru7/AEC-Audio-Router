@@ -29,6 +29,9 @@ internal sealed record RouteSettings(
 
 internal sealed record Endpoint(string Id, string Name)
 {
+    // The microphone output choice that sends the processed audio nowhere.
+    public static readonly Endpoint None = new("none", "なし（出力しない）");
+
     public static Endpoint[] List(MMDeviceEnumerator enumerator, DataFlow flow)
     {
         var devices = new List<Endpoint>();
@@ -50,6 +53,7 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
     private readonly Stack<IDisposable> resources = new();
     private readonly object timingGate = new();
     private RouteBuffer? route;
+    public bool Routed => route is not null;
     private AecPipeline? aec;
     private int disposed;
     private volatile bool aecEnabled = true;
@@ -61,6 +65,8 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
     public Meter Reference { get; } = new();
     public Meter Microphone { get; } = new();
     public Meter Output { get; } = new();
+    // The last seconds before and after processing, for listening back after the session stops.
+    public ListenBackRecorder ListenBack { get; } = new();
     public int SampleRate { get; private set; }
     public bool AecEnabled
     {
@@ -91,13 +97,13 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
         settings.Validate();
         var devices = Own(new MMDeviceEnumerator());
         var micDevice = Own(devices.GetDevice(settings.Microphone));
-        var outputDevice = Own(devices.GetDevice(settings.Output));
         var mic = Own(new WasapiCapture(micDevice, false, 20));
         var micFormat = mic.WaveFormat;
         var micDecoder = new PcmSamples(micFormat);
         ValidateChannel(micDecoder, settings.MicrophoneChannel);
         SampleRate = Aec3Processor.SampleRate;
-        var buffer = new RouteBuffer(SampleRate, SampleRate * MaxQueueMs / 1000);
+        bool routed = settings.Output != Endpoint.None.Id;
+        var buffer = routed ? new RouteBuffer(SampleRate, SampleRate * MaxQueueMs / 1000) : null;
         route = buffer;
 
         bool sharedCapture = settings.Mode == ReferenceMode.Input && settings.ReferenceEndpoint == settings.Microphone;
@@ -144,9 +150,14 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
         };
         mic.RecordingStopped += (_, e) => UnexpectedStop("マイク入力", e.Exception);
 
-        var output = Own(new WasapiOut(outputDevice, AudioClientShareMode.Shared, false, RequestedOutputMs));
-        output.Init(new SampleToWaveProvider(buffer));
-        output.PlaybackStopped += (_, e) => UnexpectedStop("マイク出力", e.Exception);
+        WasapiOut? output = null;
+        if (buffer is not null)
+        {
+            var outputDevice = Own(devices.GetDevice(settings.Output));
+            output = Own(new WasapiOut(outputDevice, AudioClientShareMode.Shared, false, RequestedOutputMs));
+            output.Init(new SampleToWaveProvider(buffer));
+            output.PlaybackStopped += (_, e) => UnexpectedStop("マイク出力", e.Exception);
+        }
 
         WasapiCapture? referenceCapture = null;
         WasapiOut? referencePlayback = null;
@@ -196,15 +207,16 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
             referenceCapture.RecordingStopped += (_, e) => UnexpectedStop("参照入力", e.Exception);
         }
 
-        aec = Own(new AecPipeline(micFormat.SampleRate, referenceRate, buffer, Output) { Enabled = aecEnabled });
+        aec = Own(new AecPipeline(micFormat.SampleRate, referenceRate, buffer, Output, ListenBack) { Enabled = aecEnabled });
         aec.SetNoiseSuppression(noiseSuppression);
         referenceCapture?.StartRecording();
         mic.StartRecording();
-        output.Play();
+        output?.Play();
         referencePlayback?.Play();
     }
 
-    public (double? CallbackMs, double QueueMs, long Dropped, long Missing) ReadTiming()
+    // QueueMs is null without an output.
+    public (double? CallbackMs, double? QueueMs, long Dropped, long Missing) ReadTiming()
     {
         double? callback;
         lock (timingGate)
@@ -212,7 +224,9 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
             callback = micBlocks > 0 ? 1000.0 * micTicks / Stopwatch.Frequency / micBlocks : null;
             micTicks = micBlocks = 0;
         }
-        var (queued, dropped, missing) = route!.Status;
+        if (route is null)
+            return (callback, null, 0, 0);
+        var (queued, dropped, missing) = route.Status;
         return (callback, queued, dropped, missing);
     }
 

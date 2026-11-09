@@ -47,6 +47,9 @@ internal sealed class Aec3Processor : IDisposable
 {
     public const int SampleRate = 48000;
     public const int FrameSamples = 480;
+    // Output lags input by about 9 ms (the band split and merge), measured by
+    // ListenBackTests.PipelineRecordsBothTracksInStep.
+    public const int DelaySamples = 433;
     // Version 2 adds the ns_* RNNoise exports, 3 aec3_resampler_create_pair.
     private const int AbiVersion = 3;
     private readonly Aec3Handle handle;

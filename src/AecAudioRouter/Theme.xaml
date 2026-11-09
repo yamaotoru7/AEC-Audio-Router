@@ -294,4 +294,49 @@
             </Setter.Value>
         </Setter>
     </Style>
+    <!-- A recorded track to listen to: the checked one is heard, a click on another switches to it. -->
+    <Style x:Key="Lane" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{StaticResource Text}"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Frame" Background="#151A1F" BorderBrush="#2C353F" BorderThickness="1"
+                        CornerRadius="8" Padding="10,7,10,6" Opacity="0.6">
+                        <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Frame" Property="Opacity" Value="0.8"/>
+                            <Setter TargetName="Frame" Property="BorderBrush" Value="#6A7E88"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Frame" Property="Opacity" Value="1"/>
+                            <Setter TargetName="Frame" Property="Background" Value="#17201E"/>
+                            <Setter TargetName="Frame" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Frame" Property="BorderThickness" Value="2"/>
+                            <Setter TargetName="Frame" Property="Padding" Value="9,6,9,5"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- The right-hand note of a lane: which one is heard. -->
+    <Style x:Key="LaneNote" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+        <Setter Property="Text" Value="クリックで切り替え"/>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding IsChecked, RelativeSource={RelativeSource AncestorType=RadioButton}}" Value="True">
+                <Setter Property="Text" Value="♪ この音を再生"/>
+                <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
 </ResourceDictionary>

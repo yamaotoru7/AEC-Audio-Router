@@ -11,11 +11,14 @@ internal sealed class AecPipeline : IDisposable
     private readonly Queue<AudioFrame> microphones = new();
     private readonly float[] alignedReference = new float[Aec3Processor.FrameSamples];
     private readonly float[] bypass = new float[Aec3Processor.FrameSamples];
+    private readonly float[] unprocessed = new float[Aec3Processor.FrameSamples];
+    private readonly ListenBackRecorder? recorder;
     private volatile bool enabled = true;
     private INoiseSuppressor? suppressor;
     private NoiseSuppressionMode noiseSuppression;
     private AudioFrame? currentReference;
-    private readonly RouteBuffer output;
+    // Null when the microphone output is "なし": only the meter and the recorder get the audio.
+    private readonly RouteBuffer? output;
     private readonly Meter meter;
     private bool disposed;
     private long missing;
@@ -23,7 +26,7 @@ internal sealed class AecPipeline : IDisposable
     private long resets;
     private double lastMicTime = double.NaN;
 
-    public AecPipeline(int microphoneRate, int referenceRate, RouteBuffer output, Meter meter)
+    public AecPipeline(int microphoneRate, int referenceRate, RouteBuffer? output, Meter meter, ListenBackRecorder? recorder = null)
     {
         processor = new Aec3Processor();
         try
@@ -35,6 +38,7 @@ internal sealed class AecPipeline : IDisposable
         catch { processor.Dispose(); throw; }
         this.output = output;
         this.meter = meter;
+        this.recorder = recorder;
     }
 
     // When disabled, AEC3 keeps adapting on a copy so re-enabling takes effect
@@ -136,7 +140,7 @@ internal sealed class AecPipeline : IDisposable
     }
 
     // Covers the longest noise suppressor delay (DPDFNet, 50 ms).
-    private const int SuppressorFlushFrames = DpdfnetSuppressor.DelaySamples / Aec3Processor.FrameSamples + 1;
+    private const int SuppressorFlushFrames = INoiseSuppressor.MaxDelaySamples / Aec3Processor.FrameSamples + 1;
 
     private void Process(AudioFrame microphone)
     {
@@ -172,10 +176,13 @@ internal sealed class AecPipeline : IDisposable
         if (incomplete) missing++;
         bool apply = enabled;
         if (!apply) Array.Copy(microphone.Samples, bypass, bypass.Length);
+        if (recorder is not null) Array.Copy(microphone.Samples, unprocessed, unprocessed.Length);
         processor.Process(alignedReference, microphone.Samples);
         var routed = apply ? microphone.Samples : bypass;
         suppressor?.Process(routed);
-        output.Write(routed);
+        output?.Write(routed);
+        recorder?.Write(unprocessed, routed, (apply ? Aec3Processor.DelaySamples : 0)
+            + (suppressor is null ? 0 : INoiseSuppressor.DelayOf(noiseSuppression)));
         var level = new LevelWindow();
         foreach (float sample in routed) level.Add(sample);
         meter.Add(level);
