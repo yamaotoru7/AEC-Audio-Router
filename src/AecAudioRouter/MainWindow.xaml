@@ -210,17 +210,17 @@
                         <StackPanel>
                             <TextBlock Text="パフォーマンス" Style="{StaticResource Heading}" Margin="0,0,0,13"/>
                             <UniformGrid Columns="3">
-                                <StackPanel ToolTip="プロセスの CPU 使用率（全論理コア比）">
-                                    <TextBlock Text="CPU" Style="{StaticResource Caption}"/>
-                                    <TextBlock x:Name="CpuValue" Style="{StaticResource Readout}" FontSize="17" Margin="0,4,0,0"/>
+                                <StackPanel ToolTip="マイクの音を受け取ってから、出力デバイスに渡すまでの遅延（実測の平均）。参照を待つ時間、10 ms ごとのまとめ、AEC3、ノイズ除去、出力のバッファを含みます。&#10;マイクと出力デバイスのハードウェア・ドライバー内の遅延と、受け取る側のアプリの遅延は含みません。">
+                                    <TextBlock Text="遅延" Style="{StaticResource Caption}"/>
+                                    <TextBlock x:Name="LatencyValue" Style="{StaticResource Readout}" FontSize="17" Margin="0,4,0,0"/>
                                 </StackPanel>
                                 <StackPanel ToolTip="マイク入力1ブロックあたりの平均処理時間">
                                     <TextBlock Text="処理時間" Style="{StaticResource Caption}"/>
                                     <TextBlock x:Name="ProcessingValue" Style="{StaticResource Readout}" FontSize="17" Margin="0,4,0,0"/>
                                 </StackPanel>
-                                <StackPanel ToolTip="出力キュー内にある音声の長さ">
-                                    <TextBlock Text="出力待ち" Style="{StaticResource Caption}"/>
-                                    <TextBlock x:Name="QueueValue" Style="{StaticResource Readout}" FontSize="17" Margin="0,4,0,0"/>
+                                <StackPanel ToolTip="プロセスの CPU 使用率（全論理コア比）">
+                                    <TextBlock Text="CPU" Style="{StaticResource Caption}"/>
+                                    <TextBlock x:Name="CpuValue" Style="{StaticResource Readout}" FontSize="17" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </UniformGrid>
                             <TextBlock x:Name="BufferStats" Style="{StaticResource Caption}" Margin="0,11,0,0"/>

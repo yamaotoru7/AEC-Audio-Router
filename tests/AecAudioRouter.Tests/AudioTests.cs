@@ -30,6 +30,7 @@ internal static class AudioTests
             AecTests.PipelineHandlesJitterSilenceAndCaptureRestarts,
             AecTests.PipelineCancelsEchoAcrossRatesWithJitterAndClockDrift,
             AecTests.PipelineKeepsCancellingAfterShortReferencePauses,
+            AecTests.PipelineWaitsOnlyAsLongAsTheReferenceNeeds,
             AecTests.PipelineBypassRoutesRawMicrophoneAndKeepsAdapting,
             NoiseTests.FftMatchesDftAndInverts,
             NoiseTests.RnnoiseSuppressesNoiseAndKeepsSpeech,

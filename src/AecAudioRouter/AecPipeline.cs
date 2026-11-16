@@ -2,7 +2,15 @@ namespace AecAudioRouter;
 
 internal sealed class AecPipeline : IDisposable
 {
-    public const int AlignmentDelayMs = 40;
+    // A microphone frame waits until the reference covering the same time has arrived,
+    // but never longer than this. Capture devices deliver every 10 ms, at their own phase,
+    // so the wait is 0 to 10 ms; with the loopback lead there is usually none.
+    public const int MaxReferenceWaitMs = 40;
+    // The reference lead for loopback (see the constructor).
+    public const int LoopbackLeadMs = 10;
+    // Loopback sends nothing while nothing plays. Without a reference packet for this long,
+    // the microphone does not wait: no echo can be on its way.
+    private const double ReferenceIdleSeconds = 0.03;
     private readonly object gate = new();
     private readonly AudioFrameStream referenceStream;
     private readonly AudioFrameStream microphoneStream;
@@ -25,9 +33,19 @@ internal sealed class AecPipeline : IDisposable
     private long dropped;
     private long resets;
     private double lastMicTime = double.NaN;
+    private double lastReferenceStart = double.NaN;
+    private double lastReferenceArrival = double.NaN;
+    private readonly double referenceLead;
 
-    public AecPipeline(int microphoneRate, int referenceRate, RouteBuffer? output, Meter meter, ListenBackRecorder? recorder = null)
+    // referenceLead: how much earlier than the microphone the reference is read. Loopback
+    // taps the mix before the engine plays it, and its packets are stamped a period (10 ms)
+    // before they arrive, so its sound reaches the microphone at least that much later.
+    // Reading it 10 ms early leaves AEC3 a shorter but still positive delay, and the
+    // microphone no longer waits for the reference packet of its own period.
+    public AecPipeline(int microphoneRate, int referenceRate, RouteBuffer? output, Meter meter,
+        ListenBackRecorder? recorder = null, double referenceLead = 0)
     {
+        this.referenceLead = referenceLead;
         processor = new Aec3Processor();
         try
         {
@@ -88,13 +106,17 @@ internal sealed class AecPipeline : IDisposable
     {
         lock (gate)
         {
-            if (disposed) return;
+            // An empty packet (a capture timeout while loopback is idle) must not count as an arrival.
+            if (disposed || samples.IsEmpty) return;
             referenceStream.Push(samples, arrivalTime, frame =>
             {
                 references.Enqueue(frame);
+                lastReferenceStart = frame.Time;
                 // Never retain more than half a second if capture stops.
                 while (references.Count > 50) { references.Dequeue(); dropped++; }
             });
+            lastReferenceArrival = arrivalTime;
+            ProcessReady(arrivalTime);
         }
     }
 
@@ -109,10 +131,22 @@ internal sealed class AecPipeline : IDisposable
                     ResetAfterDiscontinuity();
                 lastMicTime = frame.Time;
                 microphones.Enqueue(frame);
-                // Let reference callbacks arrive before processing the corresponding capture.
-                if (microphones.Count <= AlignmentDelayMs / 10) return;
-                Process(microphones.Dequeue());
             });
+            ProcessReady(arrivalTime);
+        }
+    }
+
+    // Processes the waiting microphone frames whose reference is in, oldest first.
+    private void ProcessReady(double now)
+    {
+        bool idle = double.IsNaN(lastReferenceArrival) || now - lastReferenceArrival > ReferenceIdleSeconds;
+        while (microphones.TryPeek(out var next))
+        {
+            // The newest reference frame starts no earlier than this one: it covers it to the end.
+            bool covered = lastReferenceStart >= next.Time - referenceLead;
+            if (!covered && !idle && microphones.Count <= MaxReferenceWaitMs / 10)
+                return;
+            Process(microphones.Dequeue());
         }
     }
 
@@ -150,7 +184,7 @@ internal sealed class AecPipeline : IDisposable
         bool incomplete = false;
         for (int i = 0; i < alignedReference.Length; i++)
         {
-            double time = microphone.Time + (double)i / Aec3Processor.SampleRate;
+            double time = microphone.Time - referenceLead + (double)i / Aec3Processor.SampleRate;
             while (references.TryPeek(out var ready) && ready.Time <= time)
             {
                 if (currentReference is not null && ready.Time < time - 0.02) dropped++;
@@ -170,7 +204,7 @@ internal sealed class AecPipeline : IDisposable
             int index = (int)position;
             float first = currentReference!.Samples[index];
             float second = index + 1 < Aec3Processor.FrameSamples ? currentReference.Samples[index + 1]
-                : hasNext && next!.Time - currentReference.Time < 0.011 ? next.Samples[0] : 0;
+                : hasNext && next!.Time - currentReference.Time < 0.011 ? next.Samples[0] : first;
             alignedReference[i] = first + (second - first) * (float)(position - index);
         }
         if (incomplete) missing++;
@@ -180,9 +214,11 @@ internal sealed class AecPipeline : IDisposable
         processor.Process(alignedReference, microphone.Samples);
         var routed = apply ? microphone.Samples : bypass;
         suppressor?.Process(routed);
-        output?.Write(routed);
-        recorder?.Write(unprocessed, routed, (apply ? Aec3Processor.DelaySamples : 0)
-            + (suppressor is null ? 0 : INoiseSuppressor.DelayOf(noiseSuppression)));
+        int delay = (apply ? Aec3Processor.DelaySamples : 0)
+            + (suppressor is null ? 0 : INoiseSuppressor.DelayOf(noiseSuppression));
+        // Stamped with the capture time of the sound it carries, for the delay readout.
+        output?.Write(routed, microphone.Time - (double)delay / Aec3Processor.SampleRate);
+        recorder?.Write(unprocessed, routed, delay);
         var level = new LevelWindow();
         foreach (float sample in routed) level.Add(sample);
         meter.Add(level);

@@ -247,7 +247,7 @@ public partial class MainWindow : Window
             session = pending;
             recording = null;
             SetRunning(true);
-            Status.Text = $"{(IsAecOn ? "AEC3" : "AEC3 無効")}  ·  {session.SampleRate / 1000.0:0.###} kHz  ·  モノラル  ·  同期用バッファ {AecPipeline.AlignmentDelayMs} ms"
+            Status.Text = $"{(IsAecOn ? "AEC3" : "AEC3 無効")}  ·  {session.SampleRate / 1000.0:0.###} kHz  ·  モノラル  ·  参照待ち 最大 {AecPipeline.MaxReferenceWaitMs} ms"
                 + (session.Routed ? "" : "  ·  出力なし（聞き返し用に録音のみ）");
             timer.Start();
             SaveSettings();
@@ -339,7 +339,7 @@ public partial class MainWindow : Window
         RenderLevel(ReferenceMeter, ReferenceValue, active.Reference.ReadAndReset());
         RenderLevel(MicMeter, MicValue, active.Microphone.ReadAndReset());
         RenderLevel(OutputMeter, OutputValue, active.Output.ReadAndReset());
-        var (callback, queued, dropped, missing) = active.ReadTiming();
+        var timing = active.ReadTiming();
 
         long now = Stopwatch.GetTimestamp();
         double elapsed = Stopwatch.GetElapsedTime(previousCpuTime, now).TotalSeconds;
@@ -352,10 +352,14 @@ public partial class MainWindow : Window
         }
 
         CpuValue.Text = cpuPercent.HasValue ? $"{cpuPercent.Value:F2}%" : "—";
-        ProcessingValue.Text = callback.HasValue ? $"{callback.Value:F3} ms" : "—";
-        QueueValue.Text = queued is { } q ? $"{q:F1} ms" : "—";
-        BufferStats.Text = queued is null ? "マイクの出力先：なし"
-            : $"バッファ要求 {AudioSession.RequestedOutputMs} ms  ·  廃棄 {dropped:N0} / 無音補完 {missing:N0} サンプル";
+        ProcessingValue.Text = timing.CallbackMs is { } callback ? $"{callback:F3} ms" : "—";
+        // Keeps the last value between ticks in which nothing was played.
+        if (timing.LatencyMs is { } latency)
+            LatencyValue.Text = $"{latency:F0} ms";
+        else if (timing.QueueMs is null)
+            LatencyValue.Text = "—";
+        BufferStats.Text = timing.QueueMs is not { } queued ? "マイクの出力先：なし"
+            : $"出力の余裕 {timing.MarginMs:F0} ms  ·  出力待ち {queued:F1} ms  ·  廃棄 {timing.Dropped:N0} / 無音補完 {timing.Missing:N0} サンプル";
         var aecStats = active.AecStatus;
         BufferStats.Text += $"\n参照欠落 {aecStats.Missing:N0} / 同期廃棄 {aecStats.Dropped:N0} フレーム  ·  AEC 再同期 {aecStats.Resets:N0}";
     }
@@ -365,8 +369,8 @@ public partial class MainWindow : Window
         RenderLevel(ReferenceMeter, ReferenceValue, default);
         RenderLevel(MicMeter, MicValue, default);
         RenderLevel(OutputMeter, OutputValue, default);
-        CpuValue.Text = ProcessingValue.Text = QueueValue.Text = "—";
-        BufferStats.Text = $"バッファ要求 {AudioSession.RequestedOutputMs} ms";
+        CpuValue.Text = ProcessingValue.Text = LatencyValue.Text = "—";
+        BufferStats.Text = "";
     }
 
     private static void RenderLevel(ProgressBar bar, TextBlock text, Level level)

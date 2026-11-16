@@ -48,7 +48,7 @@ internal sealed class AudioFrameStream : IDisposable
         // Samples that start later than expected mean the device sent nothing for a while
         // (loopback does this while nothing plays), so resynchronize after a short gap:
         // a stale clock would stamp the new audio in the past, and once that exceeds
-        // AecPipeline.AlignmentDelayMs every reference frame arrives too late to be used.
+        // AecPipeline.MaxReferenceWaitMs every reference frame arrives too late to be used.
         // Early samples can only be scheduling jitter, so allow more before resetting.
         if (error > MaxLateSeconds || error < -MaxEarlySeconds)
         {

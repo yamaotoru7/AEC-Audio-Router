@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
-using NAudio.Wave.SampleProviders;
 
 namespace AecAudioRouter;
 
@@ -47,12 +46,16 @@ internal sealed record Endpoint(string Id, string Name)
 
 internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded) : IDisposable
 {
-    public const int RequestedOutputMs = 30;
+    // Capture in device periods (10 ms) as each one completes, rather than polling.
+    private const int CapturePeriodMs = 10;
+    // Only for playing the reference WAV file, whose delay does not reach the microphone path.
+    private const int FilePlaybackMs = 30;
     public const int MaxQueueMs = 80;
 
     private readonly Stack<IDisposable> resources = new();
     private readonly object timingGate = new();
     private RouteBuffer? route;
+    private RouteRenderer? renderer;
     public bool Routed => route is not null;
     private AecPipeline? aec;
     private int disposed;
@@ -97,7 +100,7 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
         settings.Validate();
         var devices = Own(new MMDeviceEnumerator());
         var micDevice = Own(devices.GetDevice(settings.Microphone));
-        var mic = Own(new WasapiCapture(micDevice, false, 20));
+        var mic = Own(new WasapiCapture(micDevice, true, CapturePeriodMs));
         var micFormat = mic.WaveFormat;
         var micDecoder = new PcmSamples(micFormat);
         ValidateChannel(micDecoder, settings.MicrophoneChannel);
@@ -150,13 +153,10 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
         };
         mic.RecordingStopped += (_, e) => UnexpectedStop("マイク入力", e.Exception);
 
-        WasapiOut? output = null;
         if (buffer is not null)
         {
             var outputDevice = Own(devices.GetDevice(settings.Output));
-            output = Own(new WasapiOut(outputDevice, AudioClientShareMode.Shared, false, RequestedOutputMs));
-            output.Init(new SampleToWaveProvider(buffer));
-            output.PlaybackStopped += (_, e) => UnexpectedStop("マイク出力", e.Exception);
+            renderer = Own(new RouteRenderer(outputDevice, buffer, error => UnexpectedStop("マイク出力", error)));
         }
 
         WasapiCapture? referenceCapture = null;
@@ -170,7 +170,7 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
                 var file = Own(new WaveFileReader(settings.PlaybackFile));
                 if (file.Length == 0)
                     throw new ArgumentException("WAV ファイルに音声データがありません。");
-                referencePlayback = Own(new WasapiOut(referenceDevice, AudioClientShareMode.Shared, false, RequestedOutputMs));
+                referencePlayback = Own(new WasapiOut(referenceDevice, AudioClientShareMode.Shared, false, FilePlaybackMs));
                 referencePlayback.Init(file);
                 referencePlayback.PlaybackStopped += (_, e) =>
                 {
@@ -184,7 +184,7 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
             // not the time at which the speaker rendered those samples.
             referenceCapture = Own(settings.Mode != ReferenceMode.Input
                 ? new LowLatencyLoopbackCapture(referenceDevice)
-                : new WasapiCapture(referenceDevice, false, 20));
+                : new WasapiCapture(referenceDevice, true, CapturePeriodMs));
             referenceRate = referenceCapture.WaveFormat.SampleRate;
             var decoder = new PcmSamples(referenceCapture.WaveFormat);
             ValidateChannel(decoder, settings.ReferenceChannel);
@@ -207,16 +207,16 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
             referenceCapture.RecordingStopped += (_, e) => UnexpectedStop("参照入力", e.Exception);
         }
 
-        aec = Own(new AecPipeline(micFormat.SampleRate, referenceRate, buffer, Output, ListenBack) { Enabled = aecEnabled });
+        double referenceLead = settings.Mode == ReferenceMode.Input ? 0 : AecPipeline.LoopbackLeadMs / 1000.0;
+        aec = Own(new AecPipeline(micFormat.SampleRate, referenceRate, buffer, Output, ListenBack, referenceLead) { Enabled = aecEnabled });
         aec.SetNoiseSuppression(noiseSuppression);
         referenceCapture?.StartRecording();
         mic.StartRecording();
-        output?.Play();
+        renderer?.Start();
         referencePlayback?.Play();
     }
 
-    // QueueMs is null without an output.
-    public (double? CallbackMs, double? QueueMs, long Dropped, long Missing) ReadTiming()
+    public Timing ReadTiming()
     {
         double? callback;
         lock (timingGate)
@@ -224,10 +224,11 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
             callback = micBlocks > 0 ? 1000.0 * micTicks / Stopwatch.Frequency / micBlocks : null;
             micTicks = micBlocks = 0;
         }
-        if (route is null)
-            return (callback, null, 0, 0);
+        if (route is null || renderer is null)
+            return new Timing(callback, null, null, null, 0, 0);
         var (queued, dropped, missing) = route.Status;
-        return (callback, queued, dropped, missing);
+        var (latency, margin) = renderer.ReadAndReset();
+        return new Timing(callback, latency, queued, margin, dropped, missing);
     }
 
     private static void ValidateChannel(PcmSamples decoder, int channel)
@@ -267,8 +268,12 @@ internal sealed class AudioSession(Action<string> onStopped, Action onFileEnded)
     }
 }
 
-// Poll at 20 ms, rather than the 100 ms default of WasapiLoopbackCapture.
-internal sealed class LowLatencyLoopbackCapture(MMDevice device) : WasapiCapture(device, false, 20)
+// QueueMs, LatencyMs and MarginMs are null without an output. LatencyMs runs from the
+// microphone packet to the output device taking the sample, averaged since the last read.
+internal readonly record struct Timing(double? CallbackMs, double? LatencyMs, double? QueueMs, double? MarginMs, long Dropped, long Missing);
+
+// Event-driven every device period, rather than polling every 100 ms like WasapiLoopbackCapture.
+internal sealed class LowLatencyLoopbackCapture(MMDevice device) : WasapiCapture(device, true, 10)
 {
     protected override AudioClientStreamFlags GetAudioClientStreamFlags() =>
         base.GetAudioClientStreamFlags() | AudioClientStreamFlags.Loopback;

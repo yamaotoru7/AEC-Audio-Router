@@ -95,7 +95,7 @@ internal static class ListenBackTests
             output.Read(read, 0, Frame);
         }
         var recording = recorder.Snapshot()!;
-        // The recording ends 40 ms (the alignment delay) short of the input.
+        // The reference arrives with each microphone packet, so no frame is left waiting.
         int offset = speech.Length - recording.Length;
         for (int index = 0; index < modes.Length; index++)
         {
@@ -131,8 +131,8 @@ internal static class ListenBackTests
             pipeline.AddMicrophone(mic, time);
         }
         var recording = recorder.Snapshot()!;
-        // All but the 40 ms held for alignment.
-        Require(recording.Length == speech.Length - AecPipeline.AlignmentDelayMs * Rate / 1000, $"Recorded {recording.Length} samples");
+        // The reference arrives with each microphone packet, so no frame is left waiting.
+        Require(recording.Length == speech.Length, $"Recorded {recording.Length} samples");
         float input = speech.Max(Math.Abs);
         Require(recording.After.Max(Math.Abs) > 0.5 * input, "Nothing processed was recorded");
         Require(meter.ReadAndReset().Peak > 0.5 * input, "The output meter got nothing");

@@ -207,6 +207,74 @@ internal static class AecTests
         Require(stream.Discontinuities == 0, $"10 ms of arrival jitter was taken as a gap ({stream.Discontinuities} resets)");
     }
 
+    // A microphone frame waits only until the reference covering it is in, and not at all
+    // with the loopback lead or while loopback is idle (empty packets on capture timeouts).
+    public static void PipelineWaitsOnlyAsLongAsTheReferenceNeeds()
+    {
+        const int seconds = 12;
+        var random = new Random(29);
+        var far = new float[seconds * Rate];
+        float state = 0;
+        for (int i = 0; i < far.Length; i++)
+        {
+            state = 0.85f * state + 0.15f * (float)(random.NextDouble() * 2 - 1);
+            far[i] = state * 0.6f;
+        }
+        int delay = Rate * 30 / 1000;
+        foreach (double lead in new[] { 0.0, AecPipeline.LoopbackLeadMs / 1000.0 })
+        {
+            var output = new RouteBuffer(Rate, Rate);
+            using var pipeline = new AecPipeline(Rate, Rate, output, new Meter(), null, lead);
+            var mic = new float[480];
+            var read = new float[Rate];
+            int heldAfterMicrophone = 0, releasedByReference = 0;
+            double input = 0, routed = 0;
+            for (int frame = 0; frame < seconds * 100; frame++)
+            {
+                int start = frame * 480;
+                double time = (frame + 1) * 0.01;
+                for (int i = 0; i < 480; i++) mic[i] = start + i >= delay ? 0.6f * far[start + i - delay] : 0;
+                pipeline.AddMicrophone(mic, time);
+                int afterMicrophone = output.Take(read, out _);
+                // The loopback packet of the same period arrives 9 ms after the microphone's.
+                pipeline.AddReference(far.AsSpan(start, 480), time + 0.009);
+                int afterReference = output.Take(read.AsSpan(afterMicrophone), out _);
+                if (frame < 100) continue;
+                if (afterMicrophone == 0) heldAfterMicrophone++;
+                if (afterReference == 480) releasedByReference++;
+                if (frame >= 600)
+                {
+                    input += mic.Sum(x => (double)x * x);
+                    routed += read.Take(afterMicrophone + afterReference).Sum(x => (double)x * x);
+                }
+            }
+            double erle = 10 * Math.Log10(input / Math.Max(1e-20, routed));
+            int frames = seconds * 100 - 100;
+            Console.WriteLine($"Pipeline with a {lead * 1000:F0} ms reference lead: held {heldAfterMicrophone} of {frames} frames, echo reduction={erle:F1} dB");
+            Require(erle > 15, $"Echo was not cancelled with a {lead * 1000:F0} ms reference lead");
+            if (lead == 0)
+                Require(heldAfterMicrophone == frames && releasedByReference == frames,
+                    "Without a lead the frame should wait for its reference and no longer");
+            else
+                Require(heldAfterMicrophone == 0, $"With the lead the microphone still waited ({heldAfterMicrophone} frames)");
+        }
+
+        // Idle loopback: only empty packets, every 66 ms (NAudio's capture timeout).
+        var idleOutput = new RouteBuffer(Rate, Rate);
+        using var idle = new AecPipeline(Rate, Rate, idleOutput, new Meter());
+        var silence = new float[480];
+        var drain = new float[Rate];
+        int held = 0;
+        for (int frame = 0; frame < 500; frame++)
+        {
+            double time = (frame + 1) * 0.01;
+            if (frame % 7 == 0) idle.AddReference([], time);
+            idle.AddMicrophone(silence, time);
+            if (idleOutput.Take(drain, out _) != 480) held++;
+        }
+        Require(held == 0, $"Empty loopback packets held the microphone ({held} frames)");
+    }
+
     public static void PipelineBypassRoutesRawMicrophoneAndKeepsAdapting()
     {
         var random = new Random(7);
